@@ -1,0 +1,281 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ---------- Core ----------
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  globalRole   String   @default("MEMBER") // ADMIN, MEMBER
+  createdAt    DateTime @default(now())
+
+  memberships   TeamMembership[]
+  ownedProducts Product[]        @relation("ProductOwner")
+  checks        DoneCheck[]
+  impediments   Impediment[]
+  comments      StakeholderComment[]
+  dailyNotes    DailyNote[]
+  stageClosures SprintStageClosure[] @relation("StageClosedBy")
+  delegatedItems BacklogItem[]   @relation("DelegatedBy")
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  name           String
+  productOwnerId String
+  productOwner   User     @relation("ProductOwner", fields: [productOwnerId], references: [id])
+  createdAt      DateTime @default(now())
+
+  teams        Team[]
+  backlogItems BacklogItem[]
+  goals        ProductGoal[]
+  doneCriteria DoneCriterion[]
+}
+
+model ProductGoal {
+  id          String    @id @default(uuid())
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  description String
+  status      String    @default("ACTIVE") // ACTIVE, ACHIEVED, ABANDONED
+  setAt       DateTime  @default(now())
+  resolvedAt  DateTime?
+}
+
+model Team {
+  id          String   @id @default(uuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name        String
+  createdAt   DateTime @default(now())
+
+  memberships TeamMembership[]
+  sprints     Sprint[]
+}
+
+model TeamMembership {
+  id   String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  role   String // PRODUCT_OWNER, DEVELOPER, SCRUM_MASTER, STAKEHOLDER
+
+  // Un PO ou SM qui code sur ce Sprint agit comme Developer (édite le Sprint Backlog, coche la DoD).
+  participatesAsDeveloper Boolean @default(false)
+
+  @@unique([userId, teamId])
+}
+
+// ---------- Backlog & Definition of Done ----------
+// Vocabulaire mission : ProductBacklogItem = BacklogItem (colonne productId =
+// Product Backlog unique et indépendant de chaque Product) ;
+// DodChecklist = DoneCriterion (checklist) + DoneCheck (cases cochées).
+
+model BacklogItem {
+  id          String   @id @default(uuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  status      String   @default("RAW") // RAW (brut), REFINED (affiné), READY (prêt), IN_SPRINT, DONE
+  order       Int
+  storyPoints Int?
+
+  sprintId String?
+  sprint   Sprint? @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+
+  // Colonne Kanban persistée du Suivi Sprint : TODO → IN_PROGRESS → REVIEW.
+  // (DONE n'est jamais posé à la main : passage via promotion DoD 100 %.)
+  boardColumn String @default("TODO")
+
+  // Saisie déléguée par un autre membre au nom du PO : ID de l'auteur réel.
+  delegatedById String?
+  delegatedBy   User?   @relation("DelegatedBy", fields: [delegatedById], references: [id], onDelete: SetNull)
+
+  doneChecks DoneCheck[]
+  increment  Increment?
+  dailyNotes DailyNote[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId, status])
+  @@index([sprintId])
+}
+
+// DoD UNIQUE par produit (partagée par toutes les équipes du produit).
+model DoneCriterion {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  label     String
+  active    Boolean @default(true)
+
+  checks DoneCheck[]
+}
+
+model DoneCheck {
+  id            String      @id @default(uuid())
+  backlogItemId String
+  backlogItem   BacklogItem @relation(fields: [backlogItemId], references: [id], onDelete: Cascade)
+  criterionId   String
+  criterion     DoneCriterion @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+  checkedById   String
+  checkedBy     User        @relation(fields: [checkedById], references: [id])
+  checkedAt     DateTime    @default(now())
+
+  @@unique([backlogItemId, criterionId])
+}
+
+model Increment {
+  id            String      @id @default(uuid())
+  backlogItemId String      @unique
+  backlogItem   BacklogItem @relation(fields: [backlogItemId], references: [id], onDelete: Cascade)
+  sprintId      String
+  sprint        Sprint      @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  deliveredAt   DateTime?
+  createdAt     DateTime    @default(now())
+
+  // Multi-Incréments : plusieurs Increments par Sprint (un par item DONE, livraison continue).
+  @@index([sprintId])
+}
+
+// ---------- Sprint & Événements ----------
+// Séquence stricte : UN SEUL Sprint ouvert (PLANNING/ACTIVE/REVIEW) à la fois
+// par équipe/produit — le suivant est verrouillé tant que le précédent n'est
+// pas CLOSED. La fin est régie par la time-box (endDate) : clôture automatique.
+
+model Sprint {
+  id              String    @id @default(uuid())
+  teamId          String
+  team            Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  // Titre du Sprint : propagé dans les filtres (planning, suivi) et lié aux
+  // items glissés à la création. Distinct de l'objectif (goal).
+  title           String    @default("Sprint")
+  goal            String?
+  goalLockedAt    DateTime?
+  status          String    @default("PLANNING") // PLANNING, ACTIVE, REVIEW, CLOSED, CANCELLED
+  startDate       DateTime
+  endDate         DateTime // time-box : à échéance, clôture automatique obligatoire
+  closedAt        DateTime? // horodatage officiel du passage à CLOSED
+  cancelledReason String?
+  cancelledNote   String?
+  createdAt       DateTime  @default(now())
+
+  // Suivi Kanban séquentiel : étape la plus avancée déverrouillée
+  // (TODO → IN_PROGRESS → REVIEW → DONE). Seules les étapes d'indice
+  // <= currentStage sont cliquables ; la suivante se déverrouille en
+  // clôturant l'étape courante (bouton + synthèse de clôture optionnelle).
+  // DONE est la dernière étape : aucun bouton de clôture.
+  currentStage String @default("TODO")
+
+  backlogItems        BacklogItem[]
+  increments          Increment[]
+  events              ScrumEvent[]
+  impediments         Impediment[]
+  retroActions        RetrospectiveAction[]
+  stakeholderComments StakeholderComment[]
+  dailyNotes          DailyNote[]
+  stageClosures       SprintStageClosure[]
+
+  @@index([teamId, status])
+}
+
+// ---------- Clôture séquentielle des étapes du Suivi Sprint ----------
+// Une ligne par étape clôturée (TODO, IN_PROGRESS, REVIEW) : la synthèse
+// de clôture (optionnelle, peut être vide) + qui/quand. L'existence d'une
+// clôture pour l'étape courante fait avancer `Sprint.currentStage` vers
+// l'étape suivante — impossible de sauter une étape.
+
+model SprintStageClosure {
+  id         String   @id @default(uuid())
+  sprintId   String
+  sprint     Sprint   @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  stage      String // TODO, IN_PROGRESS, REVIEW (DONE = dernière étape, sans clôture)
+  summary    String? // synthèse de clôture de l'étape (optionnelle)
+  closedById String?
+  closedBy   User?    @relation("StageClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  closedAt   DateTime @default(now())
+
+  @@unique([sprintId, stage])
+  @@index([sprintId])
+}
+
+model ScrumEvent {
+  id             String    @id @default(uuid())
+  sprintId       String
+  sprint         Sprint    @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  type           String    // SPRINT_PLANNING, DAILY_SCRUM, SPRINT_REVIEW, SPRINT_RETROSPECTIVE
+  timeboxMinutes Int
+  startedAt      DateTime?
+  endedAt        DateTime?
+  // Étape marquée comme faite par le Scrum Master (barre remplie à 100 % d'un coup).
+  completed      Boolean   @default(false)
+}
+
+model Impediment {
+  id           String    @id @default(uuid())
+  sprintId     String
+  sprint       Sprint    @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  reportedById String
+  reportedBy   User      @relation(fields: [reportedById], references: [id])
+  description  String
+  status       String    @default("OPEN") // OPEN, RESOLVED
+  raisedAt     DateTime  @default(now())
+  resolvedAt   DateTime?
+}
+
+model RetrospectiveAction {
+  id          String   @id @default(uuid())
+  sprintId    String
+  sprint      Sprint   @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  description String
+  done        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+model StakeholderComment {
+  id        String   @id @default(uuid())
+  sprintId  String
+  sprint    Sprint   @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  text      String
+  createdAt DateTime @default(now())
+}
+
+// ---------- Notes de Daily Scrum ----------
+// Historique quotidien rattaché à un ticket du Sprint (colonne Kanban
+// capturée à la saisie : TODO / IN_PROGRESS / REVIEW). Seuls les Developers
+// et le Scrum Master (+ Admin) peuvent écrire ; toute la Scrum Team lit.
+
+model DailyNote {
+  id            String      @id @default(uuid())
+  sprintId      String
+  sprint        Sprint      @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  // Ticket concerné (optionnel : une note saisie depuis la modale d'étape
+  // est rattachée à l'étape/colonne, pas à un ticket précis).
+  backlogItemId String?
+  backlogItem   BacklogItem? @relation(fields: [backlogItemId], references: [id], onDelete: Cascade)
+  column        String // TODO, IN_PROGRESS, REVIEW
+  authorId      String
+  author        User        @relation(fields: [authorId], references: [id])
+  text          String
+  // Tag auto généré à la création : "📅 Daily du 03/10/2026".
+  title         String?
+  // Nature du point : AVANCEMENT (🔵), OBSTACLE (⚠️), ANNONCE (📢).
+  nature        String      @default("AVANCEMENT")
+  createdAt     DateTime    @default(now())
+
+  @@index([sprintId])
+  @@index([backlogItemId])
+}

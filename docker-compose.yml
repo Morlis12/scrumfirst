@@ -1,0 +1,46 @@
+# Déploiement VPS single-server : app Next.js + Postgres local.
+# La DATABASE_URL de l'app pointe par défaut vers ce Postgres.
+# Pour garder une base distante existante, surchargez DATABASE_URL dans l'environnement.
+name: scrumfirst
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scrumfirst
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Définissez POSTGRES_PASSWORD dans l'environnement}
+      POSTGRES_DB: scrumfirst
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scrumfirst -d scrumfirst"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://scrumfirst:${POSTGRES_PASSWORD}@db:5432/scrumfirst?sslmode=disable
+      AUTH_SECRET: ${AUTH_SECRET:?Définissez AUTH_SECRET (openssl rand -base64 32)}
+      AUTH_TRUST_HOST: "true"
+      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:?Définissez NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}
+    command: >
+      sh -c "npx prisma db push --schema prisma/schema.prisma --accept-data-loss
+      && node prisma/seed.ts
+      && node server.js"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  pgdata:

@@ -1,0 +1,184 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Core ----------
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  globalRole   String   @default("MEMBER") // ADMIN, MEMBER
+
+  memberships   TeamMembership[]
+  ownedProducts Product[]            @relation("ProductOwner")
+  checks        DoneCheck[]
+  impediments   Impediment[]
+  comments      StakeholderComment[]
+  createdAt     DateTime @default(now())
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  name           String
+  productOwnerId String
+  productOwner   User     @relation("ProductOwner", fields: [productOwnerId], references: [id])
+
+  teams          Team[]
+  backlogItems   BacklogItem[]
+  goals          ProductGoal[]
+  doneCriteria   DoneCriterion[]
+  createdAt     DateTime @default(now())
+}
+
+model ProductGoal {
+  id          String            @id @default(uuid())
+  productId   String
+  product     Product           @relation(fields: [productId], references: [id])
+  description String
+  status      String            @default("ACTIVE") // ACTIVE, ACHIEVED, ABANDONED
+  setAt       DateTime          @default(now())
+  resolvedAt  DateTime?
+}
+
+model Team {
+  id          String   @id @default(uuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+  name        String
+  memberships TeamMembership[]
+  sprints     Sprint[]
+  createdAt   DateTime @default(now())
+}
+
+model TeamMembership {
+  id     String   @id @default(uuid())
+  userId String
+  user   User     @relation(fields: [userId], references: [id])
+  teamId String
+  team   Team     @relation(fields: [teamId], references: [id])
+  role   String   // PRODUCT_OWNER, DEVELOPER, SCRUM_MASTER, STAKEHOLDER
+
+  @@unique([userId, teamId])
+}
+
+// ---------- Backlog & Definition of Done ----------
+
+model BacklogItem {
+  id          String            @id @default(uuid())
+  productId   String
+  product     Product           @relation(fields: [productId], references: [id])
+  title       String
+  description String?
+  status      String            @default("RAW") // RAW, REFINED, READY, IN_SPRINT, DONE
+  order       Int
+  storyPoints Int?
+
+  sprintId    String?
+  sprint      Sprint?           @relation(fields: [sprintId], references: [id])
+
+  doneChecks  DoneCheck[]
+  increment   Increment?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model DoneCriterion {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  label     String
+  active    Boolean  @default(true)
+
+  checks    DoneCheck[]
+}
+
+model DoneCheck {
+  id            String        @id @default(uuid())
+  backlogItemId String
+  backlogItem   BacklogItem   @relation(fields: [backlogItemId], references: [id])
+  criterionId   String
+  criterion     DoneCriterion @relation(fields: [criterionId], references: [id])
+  checkedById   String
+  checkedBy     User          @relation(fields: [checkedById], references: [id])
+  checkedAt     DateTime      @default(now())
+
+  @@unique([backlogItemId, criterionId])
+}
+
+model Increment {
+  id            String      @id @default(uuid())
+  backlogItemId String      @unique
+  backlogItem   BacklogItem @relation(fields: [backlogItemId], references: [id])
+  sprintId      String
+  sprint        Sprint      @relation(fields: [sprintId], references: [id])
+  deliveredAt   DateTime?
+  createdAt     DateTime    @default(now())
+}
+
+// ---------- Sprint & Evénements ----------
+
+model Sprint {
+  id              String       @id @default(uuid())
+  teamId          String
+  team            Team         @relation(fields: [teamId], references: [id])
+  goal            String?
+  goalLockedAt    DateTime?
+  status          String       @default("PLANNING") // PLANNING, ACTIVE, REVIEW, CLOSED, CANCELLED
+  startDate       DateTime
+  endDate         DateTime
+  cancelledReason String?
+
+  backlogItems        BacklogItem[]
+  increments          Increment[]
+  events              ScrumEvent[]
+  impediments         Impediment[]
+  retroActions        RetrospectiveAction[]
+  stakeholderComments StakeholderComment[]
+
+  createdAt       DateTime @default(now())
+}
+
+model ScrumEvent {
+  id             String    @id @default(uuid())
+  sprintId       String
+  sprint         Sprint    @relation(fields: [sprintId], references: [id])
+  type           String    // SPRINT_PLANNING, DAILY_SCRUM, SPRINT_REVIEW, SPRINT_RETROSPECTIVE
+  timeboxMinutes Int
+  startedAt      DateTime?
+  endedAt        DateTime?
+}
+
+model Impediment {
+  id           String           @id @default(uuid())
+  sprintId     String
+  sprint       Sprint           @relation(fields: [sprintId], references: [id])
+  reportedById String
+  reportedBy   User             @relation(fields: [reportedById], references: [id])
+  description  String
+  status       String           @default("OPEN") // OPEN, RESOLVED
+  raisedAt     DateTime         @default(now())
+  resolvedAt   DateTime?
+}
+
+model RetrospectiveAction {
+  id          String   @id @default(uuid())
+  sprintId    String
+  sprint      Sprint   @relation(fields: [sprintId], references: [id])
+  description String
+  done        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+model StakeholderComment {
+  id        String   @id @default(uuid())
+  sprintId  String
+  sprint    Sprint   @relation(fields: [sprintId], references: [id])
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  text      String
+  createdAt DateTime @default(now())
+}
