@@ -42,7 +42,7 @@ type Props = {
 /**
  * Double vue Planning : Product Backlog (gauche) / Sprint courant (droite).
  * - Boîte de gauche : TOUS les items du produit hors Sprint et non DONE
- *   (sprintId null, statut != DONE) — sans filtre restrictif.
+ *   (hors Sprint, statut différent de DONE) — sans filtre restrictif.
  * - Bandeau "⚠️ Sprint verrouillé" orange/rouge si un Sprint est ouvert.
  * - Création glisser-d'abord : on glisse (ou « ＋ Composer ») des fiches READY
  *   dans la zone de composition — les fiches restent visibles, et la création
@@ -282,7 +282,7 @@ export function PlanningBoard({
 
       {/* Double vue */}
       <div className="grid gap-4 md:grid-cols-2">
-        {/* Gauche : Product Backlog du produit (sprintId null, non DONE) */}
+        {/* Gauche : Product Backlog du produit (hors Sprint, non DONE) */}
         <section
           aria-label="Product Backlog"
           className="rounded-xl border border-sand-200 bg-white p-4 shadow-sm"

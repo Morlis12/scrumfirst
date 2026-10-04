@@ -214,6 +214,68 @@ export function canManageImprovement(actor: Actor): GuardResult {
   );
 }
 
+/** Colonnes du tableau de brainstorming Rétrospective (post-its). */
+export const RETRO_IDEA_COLUMNS = ["WENT_WELL", "TO_IMPROVE", "IDEAS"] as const;
+export type RetroIdeaColumn = (typeof RETRO_IDEA_COLUMNS)[number];
+
+/**
+ * Post-it de Rétrospective : Scrum Team au complet en écriture
+ * (Stakeholder exclu, lecture seule). Texte court 2–500 caractères
+ * dans une colonne valide.
+ */
+export function canPostRetroIdea(actor: Actor, column: string, text: string): GuardResult {
+  if (!isScrumTeamActor(actor)) {
+    return deny(
+      "SCRUM_TEAM_ONLY_RETRO",
+      "Rétrospective réservée à la Scrum Team au complet (PO, Scrum Master, Developers).",
+    );
+  }
+  if (!(RETRO_IDEA_COLUMNS as readonly string[]).includes(column)) {
+    return deny("INVALID_COLUMN", "Colonne invalide (WENT_WELL, TO_IMPROVE ou IDEAS).");
+  }
+  if (text.trim().length < 2 || text.trim().length > 500) {
+    return deny("IDEA_TEXT_INVALID", "Idée trop courte (2 caractères minimum, 500 maximum).");
+  }
+  return allow();
+}
+
+/**
+ * Plan d'actions officiel : le Scrum Master ou le PO (ou Admin) crée
+ * l'action d'amélioration avec son Responsable. Developer/Stakeholder exclus.
+ */
+export function canPlanRetroAction(actor: Actor): GuardResult {
+  if (isAdminActor(actor)) return allow();
+  if (actor.isProductOwner) return allow();
+  if (actor.teamRole === TEAM_ROLES.PRODUCT_OWNER) return allow();
+  if (actor.teamRole === TEAM_ROLES.SCRUM_MASTER) return allow();
+  return deny(
+    "SM_PO_ONLY_ACTION",
+    "Création d'une action d'amélioration réservée au Scrum Master et au Product Owner.",
+  );
+}
+
+/**
+ * Session de Sprint Review — retours Stakeholders/Clients : ÉCRITURE
+ * STAKEHOLDER UNIQUEMENT. Règle inversée par rapport au reste de l'app :
+ * la Scrum Team (admin, dev, sm) lit les retours clients en lecture seule,
+ * sans pouvoir les modifier ni les supprimer.
+ */
+export function canPostStakeholderFeedback(actor: Actor, sprintStatus: string): GuardResult {
+  if (actor.teamRole !== TEAM_ROLES.STAKEHOLDER) {
+    return deny(
+      "STAKEHOLDER_WRITE_ONLY",
+      "Retours clients réservés au Stakeholder en écriture : la Scrum Team lit en lecture seule.",
+    );
+  }
+  if (sprintStatus !== SPRINT_STATUS.ACTIVE && sprintStatus !== SPRINT_STATUS.REVIEW) {
+    return deny(
+      "SPRINT_NOT_OPEN_FOR_COMMENTS",
+      "Retours possibles uniquement pendant le Sprint (ACTIVE/REVIEW).",
+    );
+  }
+  return allow();
+}
+
 /**
  * Sprint Review : accès à tous, mais Stakeholder en LECTURE SEULE absolue
  * (aucune action/modification). Les membres de la Scrum Team commentent
@@ -614,4 +676,165 @@ export function canMoveBoardItemTo(
     );
   }
   return allow();
+}
+
+// ---------- Règles métier : affectation Sprint ↔ Product Backlog ----------
+
+/**
+ * Un item affecté à un Sprint disparaît du Product Backlog et n'est plus
+ * un choix pour le Sprint suivant.
+ * - Product Backlog = items avec `sprintId == null` et statut != DONE.
+ * - Choix du Sprint suivant = items READY + `sprintId == null`.
+ * Un item avec `sprintId != null` (IN_SPRINT) est donc exclu des deux.
+ */
+export function isItemAvailableForSprint(item: {
+  status: string;
+  sprintId: string | null;
+}): boolean {
+  return item.sprintId == null && item.status === ITEM_STATUS.READY;
+}
+
+/** Un item en Sprint n'est jamais proposable pour un autre Sprint. */
+export function isItemHiddenFromBacklog(item: {
+  status: string;
+  sprintId: string | null;
+}): boolean {
+  return item.sprintId != null;
+}
+
+/**
+ * Retour manuel d'un item non terminé vers le Product Backlog depuis DONE.
+ * - Autorisé si et seulement si l'item est en Sprint, sans Increment
+ *   (DoD < 100 % : certaines cases peuvent être cochées, d'autres non).
+ * - Si toutes les cases sont cochées (DoD 100 %), la promotion en
+ *   Increment est automatique/disponible — le retour n'a plus lieu d'être
+ *   (mais reste techniquement possible tant que non promu).
+ * - Interdit si déjà DONE / Increment livré.
+ */
+export function canReturnItemToBacklog(input: {
+  status: string;
+  hasIncrement: boolean;
+  boardColumn?: string;
+}): GuardResult {
+  if (input.hasIncrement || input.status === ITEM_STATUS.DONE) {
+    return deny(
+      "ALREADY_DONE",
+      "Item déjà en DONE (Incrément livré) : retour au Backlog impossible.",
+    );
+  }
+  if (input.status !== ITEM_STATUS.IN_SPRINT) {
+    return deny(
+      "NOT_IN_SPRINT",
+      "Seul un item en Sprint (DoD non atteinte) peut retourner au Product Backlog.",
+    );
+  }
+  return allow();
+}
+
+/**
+ * Réactivation d'une étape déjà clôturée dans le Suivi Sprint.
+ * - Au départ, la séquence de déverrouillage est strictement maintenue
+ *   (TODO → IN_PROGRESS → REVIEW → DONE, clôture une par une).
+ * - Après clôture, un retour en arrière reste possible : toute étape
+ *   clôturable d'indice < étape courante peut être réactivée (rouverte).
+ * - DONE n'est pas réactivable (dernière étape, sans clôture).
+ * - Rouvrir `stage` supprime sa clôture et celles des étapes postérieures.
+ */
+export function canReopenBoardStage(stage: string, currentStage: string): GuardResult {
+  if (!(CLOSABLE_STAGES as readonly string[]).includes(stage)) {
+    return deny(
+      "STAGE_NOT_REOPENABLE",
+      "La dernière étape (DONE) ne se réactive pas.",
+    );
+  }
+  const idx = boardStageIndex(stage);
+  const cur = boardStageIndex(currentStage);
+  if (idx < 0 || cur < 0) {
+    return deny("INVALID_COLUMN", "Colonne invalide (TODO, IN_PROGRESS ou REVIEW).");
+  }
+  if (idx >= cur) {
+    return deny(
+      "STAGE_NOT_CLOSED",
+      `Étape ${stage} non clôturée (courante : ${currentStage}) : seule une étape déjà clôturée peut être réactivée.`,
+    );
+  }
+  return allow();
+}
+
+// ---------- Daily Scrums répétés (étape 2) ----------
+
+/** Objectif par défaut : 20 Daily pour un Sprint d'un mois. */
+export const DEFAULT_DAILY_TOTAL = 20;
+/** Bornes du TOTAL paramétrable par le Scrum Master. */
+export const DAILY_TOTAL_MIN = 1;
+export const DAILY_TOTAL_MAX = 60;
+
+/** Assainit le TOTAL saisi (entier dans [1, 60]). */
+export function clampDailyTotal(total: number): number {
+  if (!Number.isFinite(total)) return DEFAULT_DAILY_TOTAL;
+  return Math.min(DAILY_TOTAL_MAX, Math.max(DAILY_TOTAL_MIN, Math.floor(total)));
+}
+
+export function canSetDailyTotal(total: number): GuardResult {
+  if (!Number.isFinite(total) || Math.floor(total) !== total) {
+    return deny("DAILY_TOTAL_INVALID", "Le TOTAL doit être un nombre entier.");
+  }
+  if (total < DAILY_TOTAL_MIN || total > DAILY_TOTAL_MAX) {
+    return deny(
+      "DAILY_TOTAL_INVALID",
+      `Le TOTAL doit être entre ${DAILY_TOTAL_MIN} et ${DAILY_TOTAL_MAX}.`,
+    );
+  }
+  return allow();
+}
+
+/**
+ * Validation du Daily du jour : +1 et reset du chrono 15 min.
+ * - Refusée si clôture définitive déjà posée (étape figée).
+ * - Refusée si le compteur a déjà atteint le TOTAL (augmentez le TOTAL
+ *   ou clôturez définitivement).
+ */
+export function canValidateDaily(input: {
+  count: number;
+  total: number;
+  completed: boolean;
+}): GuardResult {
+  if (input.completed) {
+    return deny(
+      "DAILY_CLOSED",
+      "Daily définitivement clôturés : compteur figé, validation impossible.",
+    );
+  }
+  if (input.count >= input.total) {
+    return deny(
+      "DAILY_MAX_REACHED",
+      `Compteur au maximum (${input.count}/${input.total}) : augmentez le TOTAL ou cliquez « 🛑 Clôture définitive des Daily ».`,
+    );
+  }
+  return allow();
+}
+
+/**
+ * Clôture définitive des Daily : fige le compteur final, passe l'étape 2
+ * au statut « Terminé » (barre verte) et débloque « 3. Sprint Review ».
+ * Autorisée à tout moment tant que non déjà clôturée (même avant TOTAL).
+ */
+export function canCloseDailyDefinitively(input: {
+  completed: boolean;
+}): GuardResult {
+  if (input.completed) {
+    return deny("DAILY_ALREADY_CLOSED", "Daily déjà définitivement clôturés.");
+  }
+  return allow();
+}
+
+/** Progression du compteur (0–100) pour la barre verte/sable. */
+export function dailyProgress(count: number, total: number): number {
+  if (!Number.isFinite(count) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((count / total) * 100)));
+}
+
+/** L'étape « 3. Sprint Review » est débloquée quand les Daily sont définitivement clôturés. */
+export function isReviewUnlockedByDaily(dailyCompleted: boolean): boolean {
+  return dailyCompleted === true;
 }

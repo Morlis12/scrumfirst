@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "vercel-build": "prisma generate --schema prisma/schema.prisma && next build",
     "start": "next start",
     "lint": "eslint",
     "seed": "node prisma/seed.ts",

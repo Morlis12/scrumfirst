@@ -7,8 +7,13 @@ import {
   guardCloseBoardStage,
   guardManageBoard,
   guardMoveBoardItem,
+  guardReopenBoardStage,
+  guardReturnItemToBacklog,
 } from "@/lib/scrum-guards";
 import {
+  BOARD_STAGE_ORDER,
+  boardStageIndex,
+  failedItemReturnStatus,
   isStageUnlocked,
   nextBoardStage,
 } from "@/lib/scrum-rules";
@@ -188,4 +193,79 @@ export async function updateStageSummary(
     data: { summary: clean.length > 0 ? clean : null },
   });
   revalidatePath("/sprint");
+}
+
+/**
+ * Réactivation d'une étape déjà clôturée (Developers).
+ * - La séquence initiale reste verrouillée à l'aller (clôture une par une).
+ * - Au retour, on peut revenir sur une étape passée (ex. revenir sur
+ *   IN_PROGRESS depuis REVIEW/DONE) : `currentStage` recule et les
+ *   clôtures de l'étape cible + suivantes sont supprimées.
+ */
+export async function reopenStage(
+  teamId: string,
+  sprintId: string,
+  stage: string,
+): Promise<{ reopenedStage: string }> {
+  const userId = await currentUserId();
+  void userId;
+  const guard = await guardReopenBoardStage(userId, teamId, sprintId, stage);
+  if (!guard.ok) throw new Error(guard.message);
+  const db = prisma as unknown as Record<string, {
+    deleteMany: (args: unknown) => Promise<unknown>;
+  }>;
+  const delegate = db.sprintStageClosure;
+  if (!delegate) {
+    throw new Error(
+      "Client Prisma non régénéré : lancez `npx prisma generate --schema prisma/schema.prisma` puis redémarrez le serveur.",
+    );
+  }
+  const targetIdx = boardStageIndex(stage);
+  const stagesToDelete = (BOARD_STAGE_ORDER as readonly string[]).filter(
+    (_, i) => i >= targetIdx,
+  );
+  await delegate.deleteMany({
+    where: { sprintId, stage: { in: [...stagesToDelete] } },
+  });
+  await prisma.sprint.update({
+    where: { id: sprintId },
+    data: { currentStage: stage } as unknown as Record<string, unknown> as never,
+  });
+  revalidatePath("/sprint");
+  return { reopenedStage: stage };
+}
+
+/**
+ * Retour manuel d'un item non terminé vers le Product Backlog
+ * (bouton « ↩ Retour backlog » dans DONE).
+ * - Règle métier : l'item n'a pas atteint la DoD (cases partiellement
+ *   cochées autorisées). S'il est coché à 100 %, la voie normale est la
+ *   promotion en Increment (le retour reste possible tant que non promu).
+ * - Effet : détaché du Sprint (`sprintId = null`), statut REFINED
+ *   (affiné, plus « prêt »), colonne réinitialisée, checks DoD effacés
+ *   (tentative de Sprint soldée). Il réapparaît dans le Product Backlog
+ *   et redevient un choix du Sprint suivant seulement après ré-affinage
+ *   → READY.
+ */
+export async function returnItemToBacklog(
+  teamId: string,
+  sprintId: string,
+  itemId: string,
+): Promise<void> {
+  const userId = await currentUserId();
+  const guard = await guardReturnItemToBacklog(userId, teamId, sprintId, itemId);
+  if (!guard.ok) throw new Error(guard.message);
+  await prisma.doneCheck.deleteMany({ where: { backlogItemId: itemId } });
+  await prisma.backlogItem.update({
+    where: { id: itemId },
+    data: {
+      status: failedItemReturnStatus(),
+      sprintId: null,
+      boardColumn: "TODO",
+    },
+  });
+  revalidatePath("/sprint");
+  revalidatePath("/planning");
+  revalidatePath("/backlog");
+  revalidatePath("/dod");
 }

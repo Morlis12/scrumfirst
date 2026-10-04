@@ -16,6 +16,8 @@ import {
   advanceStage,
   closeStageAndUnlockNext,
   moveBoardColumn,
+  reopenStage,
+  returnItemToBacklog,
   updateStageSummary,
 } from "@/app/actions/sprint-board";
 import { Badge, buttonPrimary, buttonSecondary } from "@/components/ui";
@@ -359,6 +361,33 @@ export function SprintKanban({
     });
   }
 
+  /** Réactive une étape déjà clôturée (retour en arrière, séquence initiale conservée à l'aller). */
+  function runReopen(col: ColumnKey) {
+    setError(null);
+    setCloseMsg(null);
+    startTransition(async () => {
+      try {
+        const res = await reopenStage(teamId, sprintId, col);
+        setCloseMsg(`Étape ${res.reopenedStage} réactivée ✓ — reprenez le suivi depuis cette étape.`);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    });
+  }
+
+  /** Retourne un item non terminé (DoD < 100 %) au Product Backlog depuis DONE. */
+  function runReturn(itemId: string, closeModal = false) {
+    setError(null);
+    startTransition(async () => {
+      try {
+        await returnItemToBacklog(teamId, sprintId, itemId);
+        if (closeModal) setSelectedId(null);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    });
+  }
+
   const selectedCheck = selected
     ? checkDodComplete(
         criteria.map((c) => c.id),
@@ -633,7 +662,7 @@ export function SprintKanban({
                             disabled={pending || colIdx <= 0}
                             onClick={() => run(() => moveBoardColumn(teamId, sprintId, item.id, MOVABLE[colIdx - 1]!))}
                             aria-label={`Reculer ${item.title} vers ${colIdx > 0 ? MOVABLE[colIdx - 1] : ""}`}
-                            title="Colonne précédente (étape par étape, pas de saut)"
+                            title="Colonne précédente (étape par étape, pas de saut — réactivation possible)"
                             className="rounded-md bg-navy-900 px-2 py-0.5 text-xs font-bold text-white hover:bg-navy-800 disabled:opacity-40"
                           >
                             ←
@@ -659,6 +688,49 @@ export function SprintKanban({
                           {col.key === "REVIEW" && (
                             <span className="text-xs font-normal text-navy-900/60">→ DONE puis DoD ✓</span>
                           )}
+                        </div>
+                      )}
+                      {/* DONE : réactivation vers REVIEW + retour backlog si DoD non atteinte */}
+                      {col.key === "DONE" && !item.hasIncrement && item.status !== "DONE" && (
+                        <div className="mt-1.5 flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-1.5">
+                            {canManageBoard && (
+                              <button
+                                type="button"
+                                disabled={pending}
+                                onClick={() => run(() => moveBoardColumn(teamId, sprintId, item.id, "REVIEW"))}
+                                aria-label={`Revenir ${item.title} vers REVIEW`}
+                                title="Réactiver l'étape REVIEW (retour en arrière autorisé, séquence initiale conservée à l'aller)"
+                                className="rounded-md bg-navy-900 px-2 py-0.5 text-xs font-bold text-white hover:bg-navy-800 disabled:opacity-40"
+                              >
+                                ← REVIEW
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedId(item.id)}
+                              className="rounded-md border border-navy-900/30 px-2 py-0.5 text-xs font-bold text-navy-900 hover:bg-sand-300"
+                              title="Ouvrir la DoD : cochez certaines étapes puis Retour backlog, ou tout cocher pour 100 % automatique"
+                            >
+                              ☑ DoD ({done}/{total})
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={pending || pct === 100}
+                            onClick={() => runReturn(item.id)}
+                            title={
+                              pct === 100
+                                ? "DoD à 100 % automatique : ouvrez la DoD puis « Clore à 100 % DoD » plutôt que le retour"
+                                : "DoD non atteinte : retourne l'item au Product Backlog (affiné). Il disparaîtra du Sprint et redeviendra un choix après ré-affinage."
+                            }
+                            className="w-full rounded-md border border-orange-300 bg-orange-100 px-2 py-1 text-xs font-bold text-orange-900 hover:bg-orange-200 disabled:opacity-50"
+                          >
+                            ↩ Retour backlog (DoD {pct} %)
+                          </button>
+                          <p className="text-xs italic text-navy-900/60">
+                            DoD {done}/{total} — {pct === 100 ? "100 % automatique ✓ : promouvez en Increment." : "partielle autorisée avant retour."}
+                          </p>
                         </div>
                       )}
                       {/* Notes du Daily (TODO / IN_PROGRESS / REVIEW uniquement, étape déverrouillée) */}
@@ -853,13 +925,24 @@ export function SprintKanban({
                             </div>
                           </div>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => setEditingSummaryStage(col.key)}
-                            className="mt-1 text-xs font-bold text-navy-900 underline"
-                          >
-                            Modifier la synthèse
-                          </button>
+                          <div className="mt-1.5 flex flex-col gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditingSummaryStage(col.key)}
+                              className="text-left text-xs font-bold text-navy-900 underline"
+                            >
+                              Modifier la synthèse
+                            </button>
+                            <button
+                              type="button"
+                              disabled={pending}
+                              onClick={() => runReopen(col.key)}
+                              title={`Réactiver ${col.key} : revient sur cette étape (les clôtures suivantes sont rouvertes). Séquence initiale conservée à l'aller.`}
+                              className="w-full rounded-md border border-orange-300 bg-orange-100 px-2 py-1 text-xs font-bold text-orange-900 hover:bg-orange-200 disabled:opacity-50"
+                            >
+                              {pending ? "…" : `↩ Réactiver ${col.key} (revenir sur cette étape)`}
+                            </button>
+                          </div>
                         )
                       )}
                     </>
@@ -1185,10 +1268,16 @@ export function SprintKanban({
               </button>
             </div>
             <p className="mb-3 text-xs text-navy-900/60">
-              Dernière étape DONE : cochez les 4 critères un par un — Scrum Team (PO, SM, Dev).
-              À 100 % + commentaire, l&apos;item est promu en Incrément (validé côté serveur).{" "}
-              {selectedCheck ? `${selected.checkedCriterionIds.length}/${total} — ${selectedCheck.complete ? "100 %, clôturable" : `manquants : ${selectedCheck.missing.length}`}` : ""}
+              Dernière étape DONE : cochez les critères un par un — Scrum Team (PO, SM, Dev).
+              Si vous cochez tout, la DoD passe automatiquement à 100 % (promouvable en
+              Incrément). Sinon, cochage partiel autorisé puis bouton « Retour backlog ».{" "}
+              {selectedCheck ? `${selected.checkedCriterionIds.length}/${total} — ${selectedCheck.complete ? "100 % automatique ✓, clôturable" : `manquants : ${selectedCheck.missing.length}`}` : ""}
             </p>
+            {selectedCheck?.complete && !selected.hasIncrement && (
+              <p role="status" className="mb-2 rounded-lg border border-green-200 bg-green-50 p-2 text-xs font-bold text-green-800">
+                ✅ DoD atteinte à 100 % automatiquement — ajoutez le commentaire puis « Clore à 100 % DoD ».
+              </p>
+            )}
             {!selectedInDone && !selected.hasIncrement && (
               <p className="mb-2 rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
                 Ticket en {selectedColumn} : avancez-le en DONE (flèche → ou bouton d&apos;étape) pour cocher la DoD — pas de saut d&apos;étape.
@@ -1272,7 +1361,7 @@ export function SprintKanban({
                         : !canPromote
                           ? (selectedGuard && !selectedGuard.ok
                               ? selectedGuard.message
-                              : "DoD incomplète : cochez les 4 critères dans DONE")
+                              : "DoD incomplète : cochez tous les critères dans DONE")
                           : validationComment.trim().length < 2
                             ? "Ajoutez le commentaire de validation DoD (obligatoire)"
                             : "DoD 100 % + commentaire — clôture autorisée dans DONE"
@@ -1280,9 +1369,24 @@ export function SprintKanban({
                 >
                   {pending ? "…" : "Clore à 100 % DoD (Incrément)"}
                 </button>
+                {!selected.hasIncrement && selectedInDone && canCheck && (
+                  <button
+                    type="button"
+                    disabled={pending || canPromote}
+                    onClick={() => runReturn(selected.id, true)}
+                    title={
+                      canPromote
+                        ? "DoD à 100 % : utilisez « Clore à 100 % DoD » plutôt que le retour"
+                        : "DoD non atteinte : retourne l'item au Product Backlog (affiné). Il réapparaîtra dans le backlog et redeviendra un choix après ré-affinage."
+                    }
+                    className="rounded-md border border-orange-300 bg-orange-100 px-3 py-2 text-sm font-bold text-orange-900 hover:bg-orange-200 disabled:opacity-50"
+                  >
+                    {pending ? "…" : "↩ Retour backlog (DoD non atteinte)"}
+                  </button>
+                )}
                 {(!canPromote || !selectedInDone || validationComment.trim().length < 2) && !selected.hasIncrement && (
                   <span className="text-xs text-orange-800">
-                    En DONE : cochez les 4 critères ET renseignez le commentaire pour clore à 100 %.
+                    En DONE : cochez tous les critères + commentaire pour clore à 100 %, ou — si DoD non atteinte — « Retour backlog » (cochage partiel conservé jusqu&apos;au retour, checks effacés au retour).
                   </span>
                 )}
                 {selected.hasIncrement && (

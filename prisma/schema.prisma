@@ -21,6 +21,7 @@ model User {
   ownedProducts Product[]        @relation("ProductOwner")
   checks        DoneCheck[]
   impediments   Impediment[]
+  retroIdeas    RetrospectiveIdea[] @relation("RetroIdeaAuthor")
   comments      StakeholderComment[]
   dailyNotes    DailyNote[]
   stageClosures SprintStageClosure[] @relation("StageClosedBy")
@@ -183,6 +184,7 @@ model Sprint {
   events              ScrumEvent[]
   impediments         Impediment[]
   retroActions        RetrospectiveAction[]
+  retroIdeas          RetrospectiveIdea[]
   stakeholderComments StakeholderComment[]
   dailyNotes          DailyNote[]
   stageClosures       SprintStageClosure[]
@@ -220,6 +222,16 @@ model ScrumEvent {
   endedAt        DateTime?
   // Étape marquée comme faite par le Scrum Master (barre remplie à 100 % d'un coup).
   completed      Boolean   @default(false)
+
+  // Répétition quotidienne des Daily Scrums (étape 2) :
+  // - dailyCount : nombre de Daily validés (« Daily effectués : X / TOTAL »).
+  // - dailyTotal : objectif paramétrable par le Scrum Master (défaut 20 ≈ 1 mois).
+  // Tant que la clôture définitive (`completed`) n'est pas posée, l'étape
+  // reste active (notes + incrément + reset chrono 15 min). Au clic
+  // « 🛑 Clôture définitive des Daily », `completed` passe à true (barre
+  // verte) et débloque l'étape suivante « 3. Sprint Review ».
+  dailyCount Int @default(0)
+  dailyTotal Int @default(20)
 }
 
 model Impediment {
@@ -237,10 +249,30 @@ model Impediment {
 model RetrospectiveAction {
   id          String   @id @default(uuid())
   sprintId    String
-  sprint      Sprint   @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  sprint      Sprint    @relation(fields: [sprintId], references: [id], onDelete: Cascade)
   description String
   done        Boolean  @default(false)
+  // Responsable officiel de l'action (texte libre saisi par SM/PO).
+  owner       String?
   createdAt   DateTime @default(now())
+}
+
+// ---------- Idées de Rétrospective (brainstorming) ----------
+// Post-its posés par la Scrum Team pendant la Rétrospective :
+// WENT_WELL (🟢 bien marché), TO_IMPROVE (🔴 moins bien marché),
+// IDEAS (💡 pistes pour le futur). Stakeholder en lecture seule.
+
+model RetrospectiveIdea {
+  id        String   @id @default(uuid())
+  sprintId  String
+  sprint    Sprint   @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  column    String // WENT_WELL, TO_IMPROVE, IDEAS
+  text      String
+  authorId  String
+  author    User     @relation("RetroIdeaAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([sprintId])
 }
 
 model StakeholderComment {
@@ -250,6 +282,10 @@ model StakeholderComment {
   authorId  String
   author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
   text      String
+  // Session de Sprint Review : TEAM_SYNTHESIS (résumé de démo, Scrum Team)
+  // ou STAKEHOLDER_FEEDBACK (retours clients, Stakeholder uniquement).
+  // Défaut TEAM_SYNTHESIS : l'historique existant a été saisi par la Team.
+  kind      String   @default("TEAM_SYNTHESIS")
   createdAt DateTime @default(now())
 }
 

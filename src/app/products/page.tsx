@@ -38,7 +38,7 @@ export default async function ProductsPage() {
     <main className="mx-auto w-full max-w-5xl px-4 py-6">
       <PageHeader
         title="Produits"
-        subtitle="Un Product Backlog indépendant par produit (colonne productId). Chaque produit porte sa Checklist DoD unique, partagée par toutes ses équipes."
+        subtitle="Un Product Backlog indépendant par produit. Chaque produit porte sa Checklist DoD unique, partagée par toutes ses équipes."
       />
 
       <Card className="mb-4">

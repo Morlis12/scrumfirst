@@ -8,14 +8,19 @@ import { getMembership } from "@/lib/dal";
 import {
   autoCloseExpiredSprints,
   guardCancelSprint,
+  guardCloseDailyDefinitively,
   guardComment,
   guardCreateSprint,
+  guardDeleteSprint,
   guardEditSprintGoal,
   guardEventTimer,
   guardImprovement,
   guardPullItemToSprint,
+  guardSetDailyTotal,
   guardSprintDates,
+  guardStakeholderFeedback,
   guardStartSprint,
+  guardValidateDaily,
   failedReturnStatus,
 } from "@/lib/scrum-guards";
 import { timeboxForEvent, EVENT_ORDER } from "@/lib/scrum-rules";
@@ -165,12 +170,15 @@ export async function pullItemToSprint(teamId: string, sprintId: string, itemId:
   await autoCloseExpiredSprints(teamId);
   const guard = await guardPullItemToSprint(userId, teamId, sprintId, itemId);
   if (!guard.ok) throw new Error(guard.message);
+  // Règle métier : l'item affecté disparaît du Product Backlog
+  // (sprintId renseigné → exclu des requêtes backlog/choix) et démarre en TODO.
   await prisma.backlogItem.update({
     where: { id: itemId },
-    data: { status: "IN_SPRINT", sprintId },
+    data: { status: "IN_SPRINT", sprintId, boardColumn: "TODO" },
   });
   revalidatePath("/planning");
   revalidatePath("/backlog");
+  revalidatePath("/sprint");
 }
 
 export async function startTimer(teamId: string, eventId: string) {
@@ -245,18 +253,93 @@ export async function completeEvent(teamId: string, eventId: string) {
     },
   });
   revalidatePath("/planning");
+  revalidatePath("/sprint");
+}
+
+// ---------- Daily Scrums répétés (étape 2) : compteur X / TOTAL ----------
+
+/**
+ * TOTAL paramétrable par le Scrum Master (défaut 20 ≈ 1 mois).
+ * Refusé si l'étape est définitivement clôturée (compteur figé).
+ */
+export async function setDailyTotal(teamId: string, eventId: string, total: number) {
+  const userId = await currentUserId();
+  const clean = Math.floor(Number(total));
+  const guard = await guardSetDailyTotal(userId, teamId, eventId, clean);
+  if (!guard.ok) throw new Error(guard.message);
+  await prisma.scrumEvent.update({
+    where: { id: eventId },
+    data: { dailyTotal: clean },
+  });
+  revalidatePath("/planning");
+  revalidatePath("/sprint");
+}
+
+/**
+ * « ✓ Valider le Daily du jour » (Scrum Master) :
+ * incrémente `dailyCount` de +1 et réinitialise le chrono de 15 minutes
+ * pour le lendemain (`startedAt = maintenant`, `endedAt = null`).
+ * Tant que la clôture définitive n'est pas posée, l'étape reste active :
+ * notes de Daily + validations possibles.
+ */
+export async function validateDaily(teamId: string, eventId: string) {
+  const userId = await currentUserId();
+  const guard = await guardValidateDaily(userId, teamId, eventId);
+  if (!guard.ok) throw new Error(guard.message);
+  const event = await prisma.scrumEvent.findUnique({ where: { id: eventId } });
+  if (!event) throw new Error("Événement introuvable.");
+  const e = event as unknown as { dailyCount: number; dailyTotal: number; completed: boolean };
+  if (e.completed) throw new Error("Daily définitivement clôturés : compteur figé.");
+  if ((e.dailyCount ?? 0) >= (e.dailyTotal ?? 20)) {
+    throw new Error("Compteur au maximum : augmentez le TOTAL ou clôturez définitivement.");
+  }
+  await prisma.scrumEvent.update({
+    where: { id: eventId },
+    data: {
+      dailyCount: (e.dailyCount ?? 0) + 1,
+      // Reset du chrono 15 min pour le lendemain (nouveau Daily à animer).
+      startedAt: new Date(),
+      endedAt: null,
+      timeboxMinutes: 15,
+    },
+  });
+  revalidatePath("/planning");
+  revalidatePath("/sprint");
+}
+
+/**
+ * « 🛑 Clôture définitive des Daily » (Scrum Master) :
+ * fige le compteur final (ex. « 20 Daily effectués »), passe l'étape 2 au
+ * statut « Terminé » (barre verte, `completed = true`) et débloque
+ * automatiquement l'étape suivante « 3. Sprint Review ».
+ */
+export async function closeDailyDefinitively(teamId: string, eventId: string) {
+  const userId = await currentUserId();
+  const guard = await guardCloseDailyDefinitively(userId, teamId, eventId);
+  if (!guard.ok) throw new Error(guard.message);
+  await prisma.scrumEvent.update({
+    where: { id: eventId },
+    data: { completed: true, endedAt: new Date() },
+  });
+  revalidatePath("/planning");
+  revalidatePath("/sprint");
 }
 
 async function returnUnfinishedItems(sprintId: string) {
   // Tout item non terminé et sans Increment retourne au Product Backlog (affiné).
+  // Règle métier : il réapparaît dans le backlog et redevient un choix du
+  // Sprint suivant seulement après ré-affinage → READY. Les checks DoD de la
+  // tentative soldée sont effacés, la colonne est réinitialisée.
   const unfinished = await prisma.backlogItem.findMany({
     where: { sprintId, status: "IN_SPRINT", increment: null },
     select: { id: true },
   });
   if (!unfinished.length) return 0;
+  const ids = unfinished.map((i) => i.id);
+  await prisma.doneCheck.deleteMany({ where: { backlogItemId: { in: ids } } });
   await prisma.backlogItem.updateMany({
-    where: { id: { in: unfinished.map((i) => i.id) } },
-    data: { status: failedReturnStatus(), sprintId: null },
+    where: { id: { in: ids } },
+    data: { status: failedReturnStatus(), sprintId: null, boardColumn: "TODO" },
   });
   return unfinished.length;
 }
@@ -276,6 +359,8 @@ export async function closeSprint(teamId: string, sprintId: string) {
   });
   revalidatePath("/planning");
   revalidatePath("/backlog");
+  revalidatePath("/sprint");
+  revalidatePath("/dod");
 }
 
 export async function cancelSprint(
@@ -295,18 +380,93 @@ export async function cancelSprint(
   });
   revalidatePath("/planning");
   revalidatePath("/backlog");
+  revalidatePath("/sprint");
+  revalidatePath("/dod");
 }
 
-export async function addComment(sprintId: string, teamId: string, formData: FormData) {
+/**
+ * Suppression d'un Sprint à objectif obsolète (PO uniquement).
+ * Règle métier : ses items non terminés retournent au Product Backlog
+ * (affinés, checks DoD effacés) avant suppression ; les Incréments livrés
+ * (DONE) sont conservés (items DONE détachés, statut inchangé).
+ * Après suppression, les items retournés réapparaissent dans le backlog et
+ * redeviennent un choix du Sprint suivant après ré-affinage → READY.
+ */
+export async function deleteSprint(teamId: string, sprintId: string): Promise<void> {
+  const userId = await currentUserId();
+  const guard = await guardDeleteSprint(userId, sprintId);
+  if (!guard.ok) throw new Error(guard.message);
+  const sprint = await prisma.sprint.findUnique({
+    where: { id: sprintId },
+    select: { id: true, teamId: true },
+  });
+  if (!sprint || sprint.teamId !== teamId) throw new Error("Sprint introuvable.");
+  const unfinished = await prisma.backlogItem.findMany({
+    where: { sprintId, status: "IN_SPRINT", increment: null },
+    select: { id: true },
+  });
+  const unfinishedIds = unfinished.map((i) => i.id);
+  if (unfinishedIds.length > 0) {
+    await prisma.doneCheck.deleteMany({ where: { backlogItemId: { in: unfinishedIds } } });
+    await prisma.backlogItem.updateMany({
+      where: { id: { in: unfinishedIds } },
+      data: { status: failedReturnStatus(), sprintId: null, boardColumn: "TODO" },
+    });
+  }
+  // Items DONE : on conserve l'Incrément livré mais on détache du Sprint supprimé.
+  // (L'Increment porte sprintId avec onDelete Cascade : il sera supprimé avec
+  // le Sprint — on détache d'abord l'item pour garder sa traçabilité DONE.)
+  await prisma.backlogItem.updateMany({
+    where: { sprintId, status: "DONE" },
+    data: { sprintId: null },
+  });
+  // Nettoyage des lignes liées (évite les orphelins si cascade partielle).
+  await prisma.dailyNote.deleteMany({ where: { sprintId } });
+  await prisma.impediment.deleteMany({ where: { sprintId } });
+  await prisma.retrospectiveAction.deleteMany({ where: { sprintId } });
+  await prisma.stakeholderComment.deleteMany({ where: { sprintId } });
+  await prisma.scrumEvent.deleteMany({ where: { sprintId } });
+  const db = prisma as unknown as Record<string, { deleteMany: (args: unknown) => Promise<unknown> } | undefined>;
+  await db.sprintStageClosure?.deleteMany({ where: { sprintId } });
+  await prisma.sprint.delete({ where: { id: sprintId } });
+  revalidatePath("/planning");
+  revalidatePath("/backlog");
+  revalidatePath("/sprint");
+  revalidatePath("/dod");
+}
+
+/**
+ * Session de Sprint Review — synthèse de la Scrum Team (résumé de démo).
+ * Écriture Scrum Team (admin/dev/sm/PO), Stakeholder en lecture seule.
+ * Persisté en base, lié au Sprint courant (kind TEAM_SYNTHESIS).
+ */
+export async function addTeamSynthesis(sprintId: string, teamId: string, formData: FormData) {
   const userId = await currentUserId();
   const text = String(formData.get("text") ?? "");
   const guard = await guardComment(userId, teamId, sprintId);
   if (!guard.ok) throw new Error(guard.message);
-  if (text.trim().length < 2) throw new Error("Commentaire trop court.");
+  if (text.trim().length < 2) throw new Error("Synthèse trop courte.");
   await prisma.stakeholderComment.create({
-    data: { sprintId, authorId: userId, text: text.trim() },
+    data: { sprintId, authorId: userId, text: text.trim(), kind: "TEAM_SYNTHESIS" },
   });
-  revalidatePath("/planning");
+  revalidatePath("/sprint");
+}
+
+/**
+ * Session de Sprint Review — retours des Stakeholders/Clients.
+ * Écriture STAKEHOLDER UNIQUEMENT (Scrum Team en lecture seule).
+ * Persisté en base, lié au Sprint courant (kind STAKEHOLDER_FEEDBACK).
+ */
+export async function addStakeholderFeedback(sprintId: string, teamId: string, formData: FormData) {
+  const userId = await currentUserId();
+  const text = String(formData.get("text") ?? "");
+  const guard = await guardStakeholderFeedback(userId, teamId, sprintId);
+  if (!guard.ok) throw new Error(guard.message);
+  if (text.trim().length < 2) throw new Error("Retour trop court.");
+  await prisma.stakeholderComment.create({
+    data: { sprintId, authorId: userId, text: text.trim(), kind: "STAKEHOLDER_FEEDBACK" },
+  });
+  revalidatePath("/sprint");
 }
 
 export async function addImpediment(teamId: string, sprintId: string, formData: FormData) {

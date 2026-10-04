@@ -20,6 +20,11 @@ declare module "next-auth" {
 export const { handlers, auth, signIn, signOut } = NextAuth({
   // Sessions JWT autosuffisantes (self-hosted, aucune table de session).
   session: { strategy: "jwt" },
+  // Secret explicite : sans AUTH_SECRET en production, Auth.js répond
+  // « There was a problem with the server configuration » (erreur Configuration).
+  secret: process.env.AUTH_SECRET,
+  // Requis derrière un proxy TLS (Vercel, Docker) : sinon « UntrustedHost ».
+  trustHost: true,
   pages: { signIn: "/login" },
   providers: [
     Credentials({

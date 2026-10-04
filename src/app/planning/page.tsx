@@ -5,7 +5,6 @@ import {
   canCreateSprint,
   canStartSprint,
   computeTimeboxes,
-  compareEventsByScrumOrder,
   isOpenSprintStatus,
 } from "@/lib/scrum-rules";
 import {
@@ -15,22 +14,15 @@ import {
 } from "@/lib/scrum-guards";
 import { promoteToIncrement } from "@/app/actions/dod";
 import {
-  addComment,
-  addImpediment,
-  addRetroAction,
   cancelSprint,
   closeSprint,
   createSprint,
+  deleteSprint,
   pullItemToSprint,
-  resolveImpediment,
   startSprint,
-  startTimer,
-  stopTimer,
-  toggleRetroAction,
   updateSprintGoal,
 } from "@/app/actions/planning";
 import { ActionForm, Field, inputClass } from "@/components/action-form";
-import { EventChrono } from "@/components/event-chrono";
 import { PlanningBoard } from "@/components/planning/planning-board";
 import {
   Badge,
@@ -39,13 +31,6 @@ import {
   buttonPrimary,
   buttonSecondary,
 } from "@/components/ui";
-
-const EVENT_LABEL: Record<string, string> = {
-  SPRINT_PLANNING: "Sprint Planning",
-  DAILY_SCRUM: "Daily Scrum",
-  SPRINT_REVIEW: "Sprint Review",
-  SPRINT_RETROSPECTIVE: "Rétrospective",
-};
 
 const STATUS_TONE: Record<string, "zinc" | "blue" | "amber" | "green" | "red"> = {
   PLANNING: "amber",
@@ -116,7 +101,6 @@ export default async function PlanningPage({
       ? prisma.sprint.findUnique({
           where: { id: sprintId },
           include: {
-            events: true,
             backlogItems: {
               include: {
                 doneChecks: { select: { criterionId: true } },
@@ -124,12 +108,6 @@ export default async function PlanningPage({
               },
               orderBy: { order: "asc" },
             },
-            stakeholderComments: {
-              include: { author: { select: { email: true } } },
-              orderBy: { createdAt: "asc" },
-            },
-            impediments: { orderBy: { raisedAt: "desc" } },
-            retroActions: { orderBy: { createdAt: "asc" } },
           },
         })
       : null,
@@ -138,7 +116,7 @@ export default async function PlanningPage({
       orderBy: { order: "asc" },
     }),
     // Boîte de gauche : TOUS les items du produit sélectionné hors Sprint et non DONE
-    // (sprintId null, statut différent de DONE) — sans filtre restrictif sur REFINED.
+    // (hors Sprint, statut différent de DONE) — sans filtre restrictif sur REFINED.
     prisma.backlogItem.findMany({
       where: { productId, sprintId: null, status: { not: "DONE" } },
       orderBy: { order: "asc" },
@@ -153,7 +131,6 @@ export default async function PlanningPage({
   // Permissions d'écran : planification collective PO/SM/Dev, Stakeholder en lecture seule.
   const isStakeholder = membership?.role === "STAKEHOLDER";
   const canPlan = !!membership && !isStakeholder;
-  const isSM = membership?.role === "SCRUM_MASTER";
   const sprintDays = sprint
     ? (new Date(sprint.endDate).getTime() - new Date(sprint.startDate).getTime()) / 86400000
     : 0;
@@ -174,11 +151,6 @@ export default async function PlanningPage({
     (!startGuard.ok && "message" in startGuard ? startGuard.message : null) ??
     (!pureStart.ok && "message" in pureStart ? pureStart.message : null) ??
     null;
-  // Ordre chronologique Scrum : Planning → Daily → Review → Rétrospective (dernière).
-  // Tri en JS car le tri alphabétique SQL ("type asc") plaçait Rétrospective avant Review.
-  const orderedEvents = (sprint?.events ?? [])
-    .slice()
-    .sort(compareEventsByScrumOrder);
 
   return (
     <main className="mx-auto w-full max-w-5xl px-4 py-6">
@@ -371,66 +343,31 @@ export default async function PlanningPage({
                   </div>
                 </details>
               )}
+              {canPlan && (
+                <details className="w-full">
+                  <summary className="cursor-pointer text-sm font-medium text-red-700">
+                    Supprimer le Sprint (objectif obsolète, PO uniquement — items retournés au backlog)
+                  </summary>
+                  <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-3">
+                    <p className="mb-2 text-xs text-red-800">
+                      Règle métier : les items non terminés (DoD non atteinte) retournent
+                      automatiquement au Product Backlog (affinés, checks effacés) et
+                      redeviennent un choix du Sprint suivant après ré-affinage. Les
+                      Incréments livrés (DONE) sont conservés. Suppression définitive.
+                    </p>
+                    <form action={deleteSprint.bind(null, teamId, sprint.id)}>
+                      <button type="submit" className={buttonSecondary}>
+                        Supprimer définitivement ce Sprint
+                      </button>
+                    </form>
+                  </div>
+                </details>
+              )}
             </div>
           </Card>
 
-          {/* Chronos des événements */}
-          <Card className="mb-4">
-            <h2 className="mb-2 font-medium">Événements & chronos (Scrum Master)</h2>
-            {isSM && (
-              <p className="mb-2 text-xs text-navy-900/60">
-                Glissez le curseur d&apos;une timeline pour repositionner le chrono, ou « Terminer ✓ » pour remplir la barre d&apos;un coup (étape faite).
-              </p>
-            )}
-            {isStakeholder && (
-              <p className="mb-2 rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
-                Lecture seule : chronomètres pilotés par le Scrum Master.
-              </p>
-            )}
-            <div className="flex flex-col gap-3">
-              {orderedEvents.map((ev, idx) => {
-                const running = !!ev.startedAt && !ev.endedAt;
-                return (
-                  <div key={ev.id} className="rounded-lg border border-sand-200 p-3">
-                    <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-medium">
-                        <span className="mr-1.5 text-navy-900/40">{idx + 1}.</span>
-                        {EVENT_LABEL[ev.type] ?? ev.type}
-                      </span>
-                      {isSM && (
-                        <div className="flex gap-2">
-                          {!running && !ev.endedAt && (
-                            <form action={startTimer.bind(null, teamId, ev.id)}>
-                              <button type="submit" className={buttonSecondary}>Démarrer</button>
-                            </form>
-                          )}
-                          {running && (
-                            <form action={stopTimer.bind(null, teamId, ev.id)}>
-                              <button type="submit" className={buttonSecondary}>Stopper</button>
-                            </form>
-                          )}
-                          {ev.endedAt && !running && (
-                            <form action={startTimer.bind(null, teamId, ev.id)}>
-                              <button type="submit" className={buttonSecondary}>Relancer</button>
-                            </form>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    <EventChrono
-                      startedAtISO={ev.startedAt ? new Date(ev.startedAt).toISOString() : null}
-                      endedAtISO={ev.endedAt ? new Date(ev.endedAt).toISOString() : null}
-                      timeboxMinutes={ev.timeboxMinutes}
-                      eventId={ev.id}
-                      teamId={teamId}
-                      canManage={isSM}
-                      completed={ev.completed}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
+          {/* Chronos des événements : pilotés depuis le Suivi Sprint (/sprint),
+              commun à tous les items du Sprint (événements liés au Sprint). */}
 
           {/* Sprint Backlog */}
           <Card className="mb-4">
@@ -518,94 +455,8 @@ export default async function PlanningPage({
             </Card>
           )}
 
-          {/* Obstacles + Rétro — réservés à la Scrum Team, Stakeholder exclu */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <h2 className="mb-2 font-medium">Obstacles (Scrum Team)</h2>
-              {isStakeholder ? (
-                <p className="rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
-                  Lecture seule : suivi des obstacles réservé à la Scrum Team.
-                </p>
-              ) : (
-                <form action={addImpediment.bind(null, teamId, sprint.id)} className="mb-2 flex gap-2">
-                  <input name="description" required minLength={3} placeholder="Décrire l&apos;obstacle…" className={inputClass} />
-                  <button type="submit" className={buttonSecondary}>+</button>
-                </form>
-              )}
-              <div className="flex flex-col gap-1.5">
-                {sprint.impediments.map((imp) => (
-                  <div key={imp.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                    <span>
-                      <Badge tone={imp.status === "OPEN" ? "red" : "green"}>{imp.status}</Badge>{" "}
-                      {imp.description}
-                    </span>
-                    {!isStakeholder && (
-                      <form action={resolveImpediment.bind(null, teamId, imp.id, imp.status === "OPEN")}>
-                        <button type="submit" className={buttonSecondary}>
-                          {imp.status === "OPEN" ? "Résoudre" : "Rouvrir"}
-                        </button>
-                      </form>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Card>
-            <Card>
-              <h2 className="mb-2 font-medium">Actions d&apos;amélioration — Rétro (Scrum Team)</h2>
-              {isStakeholder ? (
-                <p className="rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
-                  Rétrospective réservée à la Scrum Team au complet (admin@, sm@, dev@)
-                  — Stakeholder bloqué en lecture seule.
-                </p>
-              ) : (
-                <form action={addRetroAction.bind(null, teamId, sprint.id)} className="mb-2 flex gap-2">
-                  <input name="description" required minLength={3} placeholder="Action d'amélioration…" className={inputClass} />
-                  <button type="submit" className={buttonSecondary}>+</button>
-                </form>
-              )}
-              <div className="flex flex-col gap-1.5">
-                {sprint.retroActions.map((a) => (
-                  <div key={a.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                    <span>
-                      {a.done ? "✅" : "⬜"} {a.description}
-                    </span>
-                    {!isStakeholder && (
-                      <form action={toggleRetroAction.bind(null, teamId, a.id, !a.done)}>
-                        <button type="submit" className={buttonSecondary}>
-                          {a.done ? "Rouvrir" : "Fait"}
-                        </button>
-                      </form>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
-
-          {/* Commentaires Review — Stakeholder en lecture seule absolue */}
-          <Card className="mt-4">
-            <h2 className="mb-2 font-medium">Commentaires — Sprint Review (lecture seule Stakeholder)</h2>
-            {isStakeholder ? (
-              <p className="mb-2 rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
-                Lecture seule absolue : vous observez l&apos;Incrément — aucun bouton
-                d&apos;action ou de modification.
-              </p>
-            ) : (
-              <form action={addComment.bind(null, sprint.id, teamId)} className="mb-2 flex gap-2">
-                <input name="text" required minLength={2} placeholder="Votre commentaire…" className={inputClass} />
-                <button type="submit" className={buttonSecondary}>Publier</button>
-              </form>
-            )}
-            <div className="flex flex-col gap-1.5">
-              {sprint.stakeholderComments.map((c) => (
-                <p key={c.id} className="text-sm">
-                  <span className="font-medium">{c.author.email}</span>{" "}
-                  <span className="text-navy-900/60">· {new Date(c.createdAt).toLocaleString("fr-FR")}</span>
-                  <br />{c.text}
-                </p>
-              ))}
-            </div>
-          </Card>
+          {/* Commentaires Review : déplacés dans le Suivi Sprint (/sprint),
+              panneau « 📣 Session de Sprint Review », liés au Sprint courant. */}
         </>
       )}
     </main>

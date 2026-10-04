@@ -13,6 +13,7 @@ import {
   canCancelSprint,
   canCheckDod,
   canCloseBoardStage,
+  canCloseDailyDefinitively,
   canCommentOnSprint,
   canCreateBacklogItemDelegated,
   canCreateProductGoal,
@@ -22,6 +23,12 @@ import {
   canEditSprintGoal,
   canModifySprintContent,
   canMoveBoardItemTo,
+  canPlanRetroAction,
+  canPostRetroIdea,
+  canPostStakeholderFeedback,
+  canReopenBoardStage,
+  canReturnItemToBacklog,
+  canSetDailyTotal,
   canStartSprint,
   canManageDodCriteria,
   canManageEventTimer,
@@ -29,8 +36,13 @@ import {
   canManageProductBacklog,
   canMarkItemReady,
   canTransitionItemStatus,
+  canValidateDaily,
   computeTimeboxes,
+  dailyProgress,
   guardDodComplete,
+  isItemAvailableForSprint,
+  isItemHiddenFromBacklog,
+  isReviewUnlockedByDaily,
   isSprintTimeboxExpired,
   isStageUnlocked,
   nextBoardStage,
@@ -43,6 +55,7 @@ import {
   autoCloseExpiredSprints,
   guardCancelSprint,
   guardCheckDod,
+  guardCloseDailyDefinitively,
   guardComment,
   guardCreateGoal,
   guardCreateItem,
@@ -54,7 +67,9 @@ import {
   guardPromoteToIncrement,
   guardPullItemToSprint,
   guardReorderBacklog,
+  guardSetDailyTotal,
   guardStartSprint,
+  guardValidateDaily,
 } from "@/lib/scrum-guards";
 
 type CaseResult = {
@@ -265,6 +280,62 @@ function runPureMatrix() {
     got: BOARD_STAGE_ORDER.join(">"),
     pass: BOARD_STAGE_ORDER.join(",") === "TODO,IN_PROGRESS,REVIEW,DONE" && nextBoardStage("TODO") === "IN_PROGRESS" && nextBoardStage("REVIEW") === "DONE" && nextBoardStage("DONE") === null,
   });
+  // 10. Règles métier affectation Sprint ↔ Backlog + retour DONE + réactivation
+  results.push({
+    id: "A56",
+    constraint: "Item en Sprint caché du backlog, non choisissable (READY + sans sprint uniquement)",
+    expectedCode: "ok",
+    got: `${isItemHiddenFromBacklog({ status: "IN_SPRINT", sprintId: "s1" })}/${isItemAvailableForSprint({ status: "READY", sprintId: null })}/${isItemAvailableForSprint({ status: "IN_SPRINT", sprintId: "s1" })}`,
+    pass:
+      isItemHiddenFromBacklog({ status: "IN_SPRINT", sprintId: "s1" }) === true &&
+      isItemAvailableForSprint({ status: "READY", sprintId: null }) === true &&
+      isItemAvailableForSprint({ status: "IN_SPRINT", sprintId: "s1" }) === false &&
+      isItemAvailableForSprint({ status: "READY", sprintId: "s1" }) === false,
+  });
+  expectAllow("A57", "Retour backlog autorisé si IN_SPRINT sans Increment (DoD partielle)", canReturnItemToBacklog({ status: "IN_SPRINT", hasIncrement: false }));
+  expectReject("A58", "Retour backlog refusé si déjà DONE/Increment", canReturnItemToBacklog({ status: "DONE", hasIncrement: true }), "ALREADY_DONE");
+  expectReject("A59", "Retour backlog refusé si hors Sprint", canReturnItemToBacklog({ status: "READY", hasIncrement: false }), "NOT_IN_SPRINT");
+  expectAllow("A60", "Réactivation IN_PROGRESS depuis REVIEW (retour arrière)", canReopenBoardStage("IN_PROGRESS", "REVIEW"));
+  expectAllow("A60b", "Réactivation TODO depuis DONE (retour arrière)", canReopenBoardStage("TODO", "DONE"));
+  expectReject("A61", "Réactivation refusée si étape non clôturée (aller inchangé)", canReopenBoardStage("REVIEW", "IN_PROGRESS"), "STAGE_NOT_CLOSED");
+  expectReject("A62", "DONE non réactivable (dernière étape)", canReopenBoardStage("DONE", "DONE"), "STAGE_NOT_REOPENABLE");
+  expectAllow("A63", "Recul ticket DONE → REVIEW autorisé si déverrouillée", canMoveBoardItemTo("DONE", "REVIEW", "DONE"));
+  // 11. Daily répétés (étape 2) : compteur X/TOTAL + clôture définitive → Review
+  expectAllow("A64", "TOTAL 20 valide (défaut mois)", canSetDailyTotal(20));
+  expectReject("A65", "TOTAL 0 rejeté", canSetDailyTotal(0), "DAILY_TOTAL_INVALID");
+  expectReject("A66", "TOTAL 99 rejeté (>60)", canSetDailyTotal(99), "DAILY_TOTAL_INVALID");
+  expectAllow("A67", "Validation Daily 5/20 autorisée", canValidateDaily({ count: 5, total: 20, completed: false }));
+  expectReject("A68", "Validation refusée si compteur au max", canValidateDaily({ count: 20, total: 20, completed: false }), "DAILY_MAX_REACHED");
+  expectReject("A69", "Validation refusée si définitivement clôturé", canValidateDaily({ count: 5, total: 20, completed: true }), "DAILY_CLOSED");
+  expectAllow("A70", "Clôture définitive autorisée si non clôturé", canCloseDailyDefinitively({ completed: false }));
+  expectReject("A71", "Clôture définitive refusée si déjà clôturé", canCloseDailyDefinitively({ completed: true }), "DAILY_ALREADY_CLOSED");
+  results.push({
+    id: "A72",
+    constraint: "Progression Daily 5/20 = 25 %",
+    expectedCode: "ok",
+    got: `${dailyProgress(5, 20)}%`,
+    pass: dailyProgress(5, 20) === 25,
+  });
+  results.push({
+    id: "A73",
+    constraint: "Review débloquée ssi Daily définitivement clôturés",
+    expectedCode: "ok",
+    got: `${isReviewUnlockedByDaily(true)}/${isReviewUnlockedByDaily(false)}`,
+    pass: isReviewUnlockedByDaily(true) === true && isReviewUnlockedByDaily(false) === false,
+  });
+  // 12. Rétrospective : post-its Scrum Team, plan d'actions SM/PO
+  expectAllow("A74", "Dev poste un post-it (Scrum Team)", canPostRetroIdea(devActor, "WENT_WELL", "Bonne entraide"));
+  expectReject("A75", "Stakeholder exclu des post-its (lecture seule)", canPostRetroIdea(stakeholderActor, "WENT_WELL", "Bonne entraide"), "SCRUM_TEAM_ONLY_RETRO");
+  expectReject("A76", "Colonne de post-it invalide rejetée", canPostRetroIdea(devActor, "TODO", "Idée"), "INVALID_COLUMN");
+  expectAllow("A77", "SM crée une action du plan (SM/PO)", canPlanRetroAction(smActor));
+  expectAllow("A77b", "PO crée une action du plan (SM/PO)", canPlanRetroAction(poActor));
+  expectReject("A78", "Dev exclu de la création d'actions", canPlanRetroAction(devActor), "SM_PO_ONLY_ACTION");
+  expectReject("A78b", "Stakeholder exclu de la création d'actions", canPlanRetroAction(stakeholderActor), "SM_PO_ONLY_ACTION");
+  // 13. Session Review : retours clients en écriture Stakeholder uniquement
+  expectAllow("A79", "Stakeholder publie un retour client (ACTIVE)", canPostStakeholderFeedback(stakeholderActor, "ACTIVE"));
+  expectReject("A80", "Dev exclu des retours clients (lecture seule)", canPostStakeholderFeedback(devActor, "ACTIVE"), "STAKEHOLDER_WRITE_ONLY");
+  expectReject("A81", "PO exclu des retours clients (lecture seule)", canPostStakeholderFeedback(poActor, "REVIEW"), "STAKEHOLDER_WRITE_ONLY");
+  expectReject("A82", "Retour client refusé hors Sprint ouvert", canPostStakeholderFeedback(stakeholderActor, "CLOSED"), "SPRINT_NOT_OPEN_FOR_COMMENTS");
 }
 
 async function runDbBackedMatrix() {
@@ -387,10 +458,18 @@ async function runDbBackedMatrix() {
 
     // Chronos : SM uniquement
     const event = await prisma.scrumEvent.create({
-      data: { sprintId: sprint.id, type: "DAILY_SCRUM", timeboxMinutes: 15 },
+      data: { sprintId: sprint.id, type: "DAILY_SCRUM", timeboxMinutes: 15, dailyCount: 5, dailyTotal: 20 },
     });
     expectReject("B14", "Dev ne démarre pas le chrono (DB)", await guardEventTimer(dev.id, team.id, event.id, "start"), "SM_ONLY_TIMER");
     expectAllow("B15", "SM démarre le chrono (DB)", await guardEventTimer(sm.id, team.id, event.id, "start"));
+
+    // Daily répétés (DB) : SM uniquement, compteur X/TOTAL, clôture → Review
+    expectReject("B15b", "Dev ne valide pas le Daily (DB)", await guardValidateDaily(dev.id, team.id, event.id), "SM_ONLY_TIMER");
+    expectAllow("B15c", "SM valide le Daily 5/20 (DB)", await guardValidateDaily(sm.id, team.id, event.id));
+    expectReject("B15d", "Dev ne modifie pas le TOTAL (DB)", await guardSetDailyTotal(dev.id, team.id, event.id, 20), "SM_ONLY_TIMER");
+    expectAllow("B15e", "SM fixe le TOTAL à 20 (DB)", await guardSetDailyTotal(sm.id, team.id, event.id, 20));
+    expectReject("B15f", "TOTAL 0 rejeté (DB)", await guardSetDailyTotal(sm.id, team.id, event.id, 0), "DAILY_TOTAL_INVALID");
+    expectAllow("B15g", "SM clôt définitivement les Daily (DB)", await guardCloseDailyDefinitively(sm.id, team.id, event.id));
 
     // Commentaires : Stakeholder en lecture seule absolue (aucune action)
     expectReject("B16", "Stakeholder en lecture seule (DB)", await guardComment(sh.id, team.id, sprint.id), "STAKEHOLDER_READ_ONLY");

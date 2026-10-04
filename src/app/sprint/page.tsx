@@ -2,10 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { currentUserId, getMyProducts, getProductTeams } from "@/lib/context";
 import { autoCloseExpiredSprints, resolveProductActor } from "@/lib/scrum-guards";
 import { getMembership } from "@/lib/dal";
-import { isOpenSprintStatus, isScrumTeamActor } from "@/lib/scrum-rules";
+import { compareEventsByScrumOrder, isOpenSprintStatus, isScrumTeamActor } from "@/lib/scrum-rules";
 import { PageHeader, Card, buttonSecondary } from "@/components/ui";
 import { inputClass } from "@/components/ui";
 import { SprintKanban } from "@/components/sprint/sprint-kanban";
+import { EventChrono } from "@/components/event-chrono";
+import { DailyScrumTracker } from "@/components/daily-scrum-tracker";
+import { addStakeholderFeedback, addTeamSynthesis } from "@/app/actions/planning";
 
 /**
  * INTERFACE DE VALIDATION DOD ET SUIVI DU SPRINT — /sprint
@@ -60,7 +63,7 @@ export default async function SprintPage({
     ? params.sprint!
     : (openSprints[0]?.id ?? sprints[0]?.id ?? null);
 
-  const [sprint, criteria, dailyNotes] = await Promise.all([
+  const [sprint, criteria, dailyNotes, sprintEvents, reviewComments] = await Promise.all([
     sprintId
       ? prisma.sprint.findUnique({
           where: { id: sprintId },
@@ -94,6 +97,27 @@ export default async function SprintPage({
             nature: true,
             createdAt: true,
             authorId: true,
+          },
+          orderBy: { createdAt: "asc" },
+        })
+      : [],
+    // Événements du Sprint (chronos + compteur Daily répété de l'étape 2).
+    sprintId
+      ? prisma.scrumEvent.findMany({
+          where: { sprintId },
+        })
+      : [],
+    // Session de Sprint Review : commentaires persistés liés au Sprint courant
+    // (synthèse Team + retours Stakeholders, distingués par `kind`).
+    sprintId
+      ? prisma.stakeholderComment.findMany({
+          where: { sprintId },
+          select: {
+            id: true,
+            kind: true,
+            text: true,
+            createdAt: true,
+            author: { select: { email: true } },
           },
           orderBy: { createdAt: "asc" },
         })
@@ -141,7 +165,24 @@ export default async function SprintPage({
     membership?.role === "SCRUM_MASTER" ||
     membership?.participatesAsDeveloper === true;
   const isStakeholder = membership?.role === "STAKEHOLDER";
+  const isSM = membership?.role === "SCRUM_MASTER";
   const roleByUserId = new Map(teamMemberships.map((m) => [m.userId, m.role] as const));
+
+  // Événements & chronos : ordre Scrum Planning → Daily → Review → Rétro.
+  const orderedSprintEvents = [...sprintEvents].sort(compareEventsByScrumOrder);
+  const dailySprintEv = orderedSprintEvents.find((e) => e.type === "DAILY_SCRUM");
+  const dailySprintCompleted = dailySprintEv?.completed === true;
+
+  // Session de Sprint Review : droits inversés par colonne.
+  // - Synthèse Team : écriture Scrum Team (Stakeholder en lecture seule).
+  // - Retours Stakeholders : écriture Stakeholder UNIQUEMENT (Team en lecture seule).
+  // Commentaires possibles uniquement pendant le Sprint (ACTIVE/REVIEW).
+  const reviewOpen =
+    sprint != null && (sprint.status === "ACTIVE" || sprint.status === "REVIEW");
+  const canPostSynthesis = !isStakeholder && membership != null && reviewOpen;
+  const canPostFeedback = isStakeholder && reviewOpen;
+  const teamSynthesis = reviewComments.filter((c) => c.kind !== "STAKEHOLDER_FEEDBACK");
+  const stakeholderFeedback = reviewComments.filter((c) => c.kind === "STAKEHOLDER_FEEDBACK");
 
   // Suivi par item : le Sprint affiche autant de suivis que d'items rattachés
   // en Planning (?item= pour suivre un item précis, sinon tous en même temps).
@@ -316,6 +357,186 @@ export default async function SprintPage({
           canCheck={canCheck}
           canAddNote={canAddNote}
         />
+      )}
+
+      {/* Événements & chronos : liés au Sprint, communs à tous ses items (en bas, après le Kanban). */}
+      {sprint && (
+        <Card className="mb-3">
+          <h2 className="mb-1 font-medium">Événements &amp; chronos — liés au Sprint (communs à tous ses items)</h2>
+          <p className="mb-2 text-xs text-navy-900/60">
+            Le Daily se répète chaque jour : validez chaque édition (+1 + reset chrono 15 min), puis clôturez définitivement pour débloquer la 3. Sprint Review.
+          </p>
+          {orderedSprintEvents.length === 0 && (
+            <p className="text-sm text-navy-900/70">Aucun événement pour ce Sprint.</p>
+          )}
+          <div className="flex flex-col gap-3">
+            {orderedSprintEvents.map((ev, idx) => {
+              const isDaily = ev.type === "DAILY_SCRUM";
+              const isReview = ev.type === "SPRINT_REVIEW";
+              const reviewLocked = isReview && !dailySprintCompleted;
+              const label =
+                ev.type === "SPRINT_PLANNING"
+                  ? "1. Sprint Planning"
+                  : ev.type === "DAILY_SCRUM"
+                    ? "2. Daily Scrum"
+                    : ev.type === "SPRINT_REVIEW"
+                      ? "3. Sprint Review"
+                      : "4. Rétrospective";
+              return (
+                <div key={ev.id} className="rounded-lg border border-sand-200 p-3">
+                  <p className="mb-1.5 text-sm font-medium">
+                    <span className="mr-1.5 text-navy-900/40">{idx + 1}.</span>
+                    {label}
+                  </p>
+                  {isDaily ? (
+                    <DailyScrumTracker
+                      teamId={teamId}
+                      eventId={ev.id}
+                      dailyCount={ev.dailyCount ?? 0}
+                      dailyTotal={ev.dailyTotal ?? 20}
+                      completed={ev.completed}
+                      timeboxMinutes={ev.timeboxMinutes}
+                      canManage={isSM}
+                    />
+                  ) : null}
+                  {reviewLocked ? (
+                    <p className="mb-2 rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
+                      🔒 Étape verrouillée : clôturez définitivement les Daily (bouton « 🛑 Clôture définitive des Daily » à l&apos;étape 2) pour débloquer la 3. Sprint Review.
+                    </p>
+                  ) : null}
+                  <EventChrono
+                    startedAtISO={ev.startedAt ? new Date(ev.startedAt).toISOString() : null}
+                    endedAtISO={ev.endedAt ? new Date(ev.endedAt).toISOString() : null}
+                    timeboxMinutes={ev.timeboxMinutes}
+                    eventId={ev.id}
+                    teamId={teamId}
+                    canManage={isDaily ? false : isReview ? isSM && !reviewLocked : isSM}
+                    completed={ev.completed}
+                  />
+                  {isDaily && ev.completed ? (
+                    <p className="mt-1 rounded-lg bg-green-50 p-2 text-xs font-bold text-green-800">
+                      ✅ 3. Sprint Review débloquée : les Daily sont définitivement clôturés.
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* 📣 Session de Sprint Review (Démo & Retours) — en bas, sous les chronos.
+          Commentaires persistés en base, liés au Sprint courant.
+          Droits inversés : synthèse = écriture Team (sh@ lecture seule) ;
+          retours = écriture Stakeholder UNIQUEMENT (Team en lecture seule). */}
+      {sprint && (
+        <Card className="mb-3">
+          <h2 className="mb-1 font-semibold text-navy-900">
+            📣 Session de Sprint Review (Démo &amp; Retours)
+          </h2>
+          <p className="mb-2 text-xs text-navy-900/60">
+            Démo de l&apos;Incrément et retours persistés, liés au Sprint courant.
+            {!reviewOpen && " Sprint clôturé : les deux colonnes sont en lecture seule."}
+          </p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <section
+              aria-label="Synthèse de la Scrum Team"
+              className="rounded-xl border border-sand-200 bg-white p-3"
+            >
+              <h3 className="rounded-lg bg-sand-300 px-2 py-1 text-sm font-bold text-navy-900">
+                ✍️ Synthèse de la Scrum Team ({teamSynthesis.length})
+              </h3>
+              <p className="mb-2 px-1 text-xs italic text-navy-900/60">
+                Résumé de la démo noté par admin@, dev@, sm@.
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {teamSynthesis.map((c) => (
+                  <p key={c.id} className="rounded-lg bg-sand-100 px-2 py-1.5 text-sm text-navy-900">
+                    <span className="font-bold">{c.author.email}</span>{" "}
+                    <span className="text-navy-900/60">
+                      · {new Date(c.createdAt).toLocaleString("fr-FR")}
+                    </span>
+                    <span className="block">{c.text}</span>
+                  </p>
+                ))}
+                {teamSynthesis.length === 0 && (
+                  <p className="px-1 text-xs text-navy-900/50">
+                    Aucune synthèse pour ce sprint pour l&apos;instant.
+                  </p>
+                )}
+              </div>
+              {canPostSynthesis ? (
+                <form action={addTeamSynthesis.bind(null, sprint.id, teamId)} className="mt-2 flex gap-2">
+                  <input
+                    name="text"
+                    required
+                    minLength={2}
+                    placeholder="Résumé de la démo…"
+                    aria-label="Synthèse de la démo"
+                    className={inputClass}
+                  />
+                  <button type="submit" className={buttonSecondary}>
+                    Publier
+                  </button>
+                </form>
+              ) : (
+                <p className="mt-2 rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
+                  {isStakeholder
+                    ? "Lecture seule : synthèse rédigée par la Scrum Team."
+                    : "Publication possible uniquement pendant le Sprint (ACTIVE/REVIEW)."}
+                </p>
+              )}
+            </section>
+            <section
+              aria-label="Retours des Stakeholders"
+              className="rounded-xl border border-sand-200 bg-white p-3"
+            >
+              <h3 className="rounded-lg bg-sand-300 px-2 py-1 text-sm font-bold text-navy-900">
+                💬 Retours des Stakeholders / Clients ({stakeholderFeedback.length})
+              </h3>
+              <p className="mb-2 px-1 text-xs italic text-navy-900/60">
+                Écriture Stakeholder uniquement — la Team lit sans modifier.
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {stakeholderFeedback.map((c) => (
+                  <p key={c.id} className="rounded-lg bg-sand-100 px-2 py-1.5 text-sm text-navy-900">
+                    <span className="font-bold">{c.author.email}</span>{" "}
+                    <span className="text-navy-900/60">
+                      · {new Date(c.createdAt).toLocaleString("fr-FR")}
+                    </span>
+                    <span className="block">{c.text}</span>
+                  </p>
+                ))}
+                {stakeholderFeedback.length === 0 && (
+                  <p className="px-1 text-xs text-navy-900/50">
+                    Aucun retour client pour ce sprint pour l&apos;instant.
+                  </p>
+                )}
+              </div>
+              {canPostFeedback ? (
+                <form action={addStakeholderFeedback.bind(null, sprint.id, teamId)} className="mt-2 flex gap-2">
+                  <input
+                    name="text"
+                    required
+                    minLength={2}
+                    placeholder="Votre retour sur la démo…"
+                    aria-label="Retour sur la démo"
+                    className={inputClass}
+                  />
+                  <button type="submit" className={buttonSecondary}>
+                    Envoyer
+                  </button>
+                </form>
+              ) : (
+                <p className="mt-2 rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
+                  {reviewOpen
+                    ? "Lecture seule : seuls les Stakeholders publient ici (la Team ne peut ni modifier ni supprimer)."
+                    : "Publication possible uniquement pendant le Sprint (ACTIVE/REVIEW)."}
+                </p>
+              )}
+            </section>
+          </div>
+        </Card>
       )}
     </main>
   );

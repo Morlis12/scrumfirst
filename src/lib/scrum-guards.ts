@@ -27,6 +27,7 @@ import {
   failedItemReturnStatus,
   guardDodComplete,
   isOpenSprintStatus,
+  isScrumTeamActor,
   validateSprintDates,
   SPRINT_STATUS,
 } from "@/lib/scrum-rules";
@@ -198,15 +199,18 @@ export async function guardStartSprint(
 
 async function returnSprintUnfinishedItems(sprintId: string) {
   // Impondérables de fin de Sprint : les items sans Increment (DoD < 100 %)
-  // sortent du Sprint et retournent au Product Backlog pour réévaluation.
+  // sortent du Sprint et retournent au Product Backlog pour réévaluation
+  // (affinés, checks DoD effacés, colonne réinitialisée).
   const unfinished = await prisma.backlogItem.findMany({
     where: { sprintId, status: "IN_SPRINT", increment: null },
     select: { id: true },
   });
   if (!unfinished.length) return 0;
+  const ids = unfinished.map((i) => i.id);
+  await prisma.doneCheck.deleteMany({ where: { backlogItemId: { in: ids } } });
   await prisma.backlogItem.updateMany({
-    where: { id: { in: unfinished.map((i) => i.id) } },
-    data: { status: failedItemReturnStatus(), sprintId: null },
+    where: { id: { in: ids } },
+    data: { status: failedItemReturnStatus(), sprintId: null, boardColumn: "TODO" },
   });
   return unfinished.length;
 }
@@ -324,6 +328,13 @@ export async function guardPullItemToSprint(
   if (!seq.ok) return seq;
   if (!item)
     return { ok: false, code: "ITEM_NOT_FOUND", message: "Item introuvable." };
+  // Règle métier : un item déjà affecté à un Sprint disparaît du Product
+  // Backlog et n'est plus un choix pour le Sprint suivant.
+  if (item.sprintId) {
+    if (item.sprintId === sprintId)
+      return { ok: false, code: "ITEM_ALREADY_IN_SPRINT", message: "Cet item est déjà dans ce Sprint." };
+    return { ok: false, code: "ITEM_ALREADY_ASSIGNED", message: "Cet item est déjà affecté à un Sprint : il a disparu du Product Backlog et n'est plus proposable." };
+  }
   if (item.status !== "READY")
     return { ok: false, code: "ITEM_NOT_READY", message: "Seul un item 'prêt' peut entrer en Sprint." };
   return { ok: true };
@@ -411,6 +422,138 @@ export async function guardCloseBoardStage(
   const currentStage =
     (sprint as { currentStage?: string }).currentStage ?? "TODO";
   return canCloseBoardStage(stage, currentStage);
+}
+
+/**
+ * Réactivation d'une étape déjà clôturée (Developers).
+ * Maintient la séquence initiale au départ (clôture une par une vers
+ * l'avant), mais autorise un retour en arrière vers une étape passée.
+ */
+export async function guardReopenBoardStage(
+  userId: string,
+  teamId: string,
+  sprintId: string,
+  stage: string,
+): Promise<GuardResult> {
+  const board = await guardManageBoard(userId, teamId);
+  if (!board.ok) return board;
+  const sprint = await prisma.sprint.findUnique({ where: { id: sprintId } });
+  if (!sprint || sprint.teamId !== teamId)
+    return { ok: false, code: "SPRINT_NOT_FOUND", message: "Sprint introuvable." };
+  if (!isOpenSprintStatus(sprint.status))
+    return { ok: false, code: "SPRINT_CLOSED", message: "Sprint clôturé : tableau figé." };
+  const { canReopenBoardStage } = await import("@/lib/scrum-rules");
+  const currentStage =
+    (sprint as { currentStage?: string }).currentStage ?? "TODO";
+  return canReopenBoardStage(stage, currentStage);
+}
+
+/**
+ * Retour manuel d'un item non terminé vers le Product Backlog depuis le
+ * Suivi Sprint (bouton « Retour backlog » dans DONE).
+ * - Scrum Team (cochage DoD) + gestion quotidienne Developers ? On exige
+ *   la Scrum Team au sens large : Developers pour le flux, mais PO/SM aussi
+ *   membres du cochage. Règle : Developers (board) OU Scrum Team (DoD).
+ *   Ici : Developers uniquement pour le déplacement, Scrum Team pour le
+ *   retour (PO peut recadrer un item non terminé).
+ * - Item IN_SPRINT sans Increment, même partiellement coché ; à 100 % la
+ *   promotion reste la voie normale (le retour reste possible tant que non promu).
+ */
+export async function guardReturnItemToBacklog(
+  userId: string,
+  teamId: string,
+  sprintId: string,
+  itemId: string,
+): Promise<GuardResult> {
+  const [sprint, item] = await Promise.all([
+    prisma.sprint.findUnique({ where: { id: sprintId } }),
+    prisma.backlogItem.findUnique({
+      where: { id: itemId },
+      include: { increment: { select: { id: true } } },
+    }),
+  ]);
+  if (!sprint || sprint.teamId !== teamId)
+    return { ok: false, code: "SPRINT_NOT_FOUND", message: "Sprint introuvable." };
+  if (!isOpenSprintStatus(sprint.status))
+    return { ok: false, code: "SPRINT_CLOSED", message: "Sprint clôturé : retour impossible." };
+  if (!item || item.sprintId !== sprintId)
+    return { ok: false, code: "ITEM_NOT_IN_SPRINT", message: "Cet item n'appartient pas à ce Sprint." };
+  const { canReturnItemToBacklog } = await import("@/lib/scrum-rules");
+  const pure = canReturnItemToBacklog({
+    status: item.status,
+    hasIncrement: item.increment != null,
+    boardColumn: item.boardColumn,
+  });
+  if (!pure.ok) return pure;
+  // Autorisation : membre de la Scrum Team (PO, SM, Dev) — Stakeholder exclu.
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    select: { productId: true, product: { select: { productOwnerId: true } } },
+  });
+  if (!team) return { ok: false, code: "TEAM_NOT_FOUND", message: "Équipe introuvable." };
+  const membership = await prisma.teamMembership.findUnique({
+    where: { userId_teamId: { userId, teamId } },
+  });
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { globalRole: true, email: true },
+  });
+  const actor: Actor = {
+    userId,
+    teamRole: membership?.role ?? null,
+    participatesAsDeveloper: membership?.participatesAsDeveloper ?? false,
+    isProductOwner: team.product.productOwnerId === userId,
+    canActAsDeveloper:
+      membership?.role === "DEVELOPER" || (membership?.participatesAsDeveloper ?? false),
+    globalRole: user?.globalRole ?? null,
+    email: user?.email ?? null,
+  };
+  if (!isScrumTeamActor(actor)) {
+    return { ok: false, code: "SCRUM_TEAM_ONLY_RETURN", message: "Retour au Backlog réservé à la Scrum Team (PO, Scrum Master, Developers)." };
+  }
+  return { ok: true };
+}
+
+/**
+ * Suppression d'un Sprint à objectif obsolète (PO uniquement).
+ * Tous les items non terminés retournent au Product Backlog (affinés) ;
+ * les Incréments livrés (DONE) sont conservés.
+ */
+export async function guardDeleteSprint(
+  userId: string,
+  sprintId: string,
+): Promise<GuardResult> {
+  const sprint = await prisma.sprint.findUnique({
+    where: { id: sprintId },
+    include: { team: { select: { productId: true } } },
+  });
+  if (!sprint)
+    return { ok: false, code: "SPRINT_NOT_FOUND", message: "Sprint introuvable." };
+  const [membership, product, user] = await Promise.all([
+    prisma.teamMembership.findFirst({
+      where: { userId, team: { productId: sprint.team.productId } },
+    }),
+    prisma.product.findUnique({
+      where: { id: sprint.team.productId },
+      select: { productOwnerId: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { globalRole: true, email: true },
+    }),
+  ]);
+  const teamRole = membership?.role ?? null;
+  const actor: Actor = {
+    userId,
+    teamRole,
+    participatesAsDeveloper: membership?.participatesAsDeveloper ?? false,
+    isProductOwner: product?.productOwnerId === userId,
+    canActAsDeveloper:
+      teamRole === "DEVELOPER" || (membership?.participatesAsDeveloper ?? false),
+    globalRole: user?.globalRole ?? null,
+    email: user?.email ?? null,
+  };
+  return canManageProductBacklog(actor);
 }
 
 export async function guardEditSprintGoal(
@@ -579,6 +722,88 @@ export async function guardEventTimer(
   return { ok: true };
 }
 
+// ---------- Daily Scrums répétés (étape 2) : SM uniquement ----------
+
+async function resolveDailyEvent(
+  userId: string,
+  teamId: string,
+  eventId: string,
+) {
+  const [membership, event] = await Promise.all([
+    prisma.teamMembership.findUnique({
+      where: { userId_teamId: { userId, teamId } },
+    }),
+    prisma.scrumEvent.findUnique({
+      where: { id: eventId },
+      include: { sprint: { select: { teamId: true } } },
+    }),
+  ]);
+  const actor: Actor = {
+    userId,
+    teamRole: membership?.role ?? null,
+    participatesAsDeveloper: membership?.participatesAsDeveloper ?? false,
+    isProductOwner: false,
+    canActAsDeveloper: membership?.role === "DEVELOPER",
+  };
+  return { actor, event };
+}
+
+/** TOTAL paramétrable : Scrum Master + événement DAILY_SCRUM non clôturé. */
+export async function guardSetDailyTotal(
+  userId: string,
+  teamId: string,
+  eventId: string,
+  total: number,
+): Promise<GuardResult> {
+  const { actor, event } = await resolveDailyEvent(userId, teamId, eventId);
+  const { canManageEventTimer, canSetDailyTotal } = await import("@/lib/scrum-rules");
+  const sm = canManageEventTimer(actor);
+  if (!sm.ok) return sm;
+  if (!event || event.sprint.teamId !== teamId)
+    return { ok: false, code: "EVENT_NOT_FOUND", message: "Événement introuvable." };
+  if (event.type !== "DAILY_SCRUM")
+    return { ok: false, code: "NOT_A_DAILY", message: "Le compteur n'existe que pour l'étape 2. Daily Scrum." };
+  if (event.completed)
+    return { ok: false, code: "DAILY_CLOSED", message: "Daily définitivement clôturés : TOTAL figé." };
+  return canSetDailyTotal(total);
+}
+
+/** Validation du Daily du jour : SM + DAILY_SCRUM + compteur non figé/non plein. */
+export async function guardValidateDaily(
+  userId: string,
+  teamId: string,
+  eventId: string,
+): Promise<GuardResult> {
+  const { actor, event } = await resolveDailyEvent(userId, teamId, eventId);
+  const { canManageEventTimer, canValidateDaily } = await import("@/lib/scrum-rules");
+  const sm = canManageEventTimer(actor);
+  if (!sm.ok) return sm;
+  if (!event || event.sprint.teamId !== teamId)
+    return { ok: false, code: "EVENT_NOT_FOUND", message: "Événement introuvable." };
+  if (event.type !== "DAILY_SCRUM")
+    return { ok: false, code: "NOT_A_DAILY", message: "La validation quotidienne n'existe que pour l'étape 2. Daily Scrum." };
+  const e = event as unknown as { dailyCount: number; dailyTotal: number; completed: boolean };
+  return canValidateDaily({ count: e.dailyCount ?? 0, total: e.dailyTotal ?? 20, completed: e.completed });
+}
+
+/** Clôture définitive : SM + DAILY_SCRUM non déjà clôturé. */
+export async function guardCloseDailyDefinitively(
+  userId: string,
+  teamId: string,
+  eventId: string,
+): Promise<GuardResult> {
+  const { actor, event } = await resolveDailyEvent(userId, teamId, eventId);
+  const { canManageEventTimer, canCloseDailyDefinitively } = await import("@/lib/scrum-rules");
+  const sm = canManageEventTimer(actor);
+  if (!sm.ok) return sm;
+  if (!event || event.sprint.teamId !== teamId)
+    return { ok: false, code: "EVENT_NOT_FOUND", message: "Événement introuvable." };
+  if (event.type !== "DAILY_SCRUM")
+    return { ok: false, code: "NOT_A_DAILY", message: "La clôture définitive n'existe que pour l'étape 2. Daily Scrum." };
+  const e = event as unknown as { completed: boolean };
+  return canCloseDailyDefinitively({ completed: e.completed });
+}
+
 export async function guardImprovement(
   userId: string,
   teamId: string,
@@ -594,6 +819,44 @@ export async function guardImprovement(
     canActAsDeveloper: false,
   };
   return canManageImprovement(actor);
+}
+
+/**
+ * Plan d'actions officiel de Rétrospective : Scrum Master ou PO
+ * (ou Admin / propriétaire du produit). Developer et Stakeholder exclus.
+ */
+export async function guardPlanRetroAction(
+  userId: string,
+  teamId: string,
+): Promise<GuardResult> {
+  const [membership, team, user] = await Promise.all([
+    prisma.teamMembership.findUnique({
+      where: { userId_teamId: { userId, teamId } },
+    }),
+    prisma.team.findUnique({
+      where: { id: teamId },
+      select: { product: { select: { productOwnerId: true } } },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { globalRole: true, email: true },
+    }),
+  ]);
+  if (!team)
+    return { ok: false, code: "TEAM_NOT_FOUND", message: "Équipe introuvable." };
+  const { canPlanRetroAction } = await import("@/lib/scrum-rules");
+  const teamRole = membership?.role ?? null;
+  const actor: Actor = {
+    userId,
+    teamRole,
+    participatesAsDeveloper: membership?.participatesAsDeveloper ?? false,
+    isProductOwner: team.product.productOwnerId === userId,
+    canActAsDeveloper:
+      teamRole === "DEVELOPER" || (membership?.participatesAsDeveloper ?? false),
+    globalRole: user?.globalRole ?? null,
+    email: user?.email ?? null,
+  };
+  return canPlanRetroAction(actor);
 }
 
 export async function guardComment(
@@ -617,4 +880,34 @@ export async function guardComment(
     canActAsDeveloper: false,
   };
   return canCommentOnSprint(actor, sprint.status);
+}
+
+/**
+ * Retours Stakeholders/Clients de la Review : écriture Stakeholder
+ * uniquement (Scrum Team en lecture seule). Adossé DB : rôle + statut Sprint.
+ */
+export async function guardStakeholderFeedback(
+  userId: string,
+  teamId: string,
+  sprintId: string,
+): Promise<GuardResult> {
+  const [membership, sprint] = await Promise.all([
+    prisma.teamMembership.findUnique({
+      where: { userId_teamId: { userId, teamId } },
+    }),
+    prisma.sprint.findUnique({ where: { id: sprintId } }),
+  ]);
+  if (!sprint)
+    return { ok: false, code: "SPRINT_NOT_FOUND", message: "Sprint introuvable." };
+  if (!membership)
+    return { ok: false, code: "NOT_A_MEMBER", message: "Réservé aux membres de l'équipe." };
+  const { canPostStakeholderFeedback } = await import("@/lib/scrum-rules");
+  const actor: Actor = {
+    userId,
+    teamRole: membership.role,
+    participatesAsDeveloper: membership.participatesAsDeveloper,
+    isProductOwner: false,
+    canActAsDeveloper: false,
+  };
+  return canPostStakeholderFeedback(actor, sprint.status);
 }
