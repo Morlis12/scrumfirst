@@ -28,6 +28,9 @@ model User {
   delegatedItems BacklogItem[]   @relation("DelegatedBy")
 }
 
+// Produit NEUTRE multi-équipes : aucun `teamId` unique ici.
+// Un produit accepte UNE LISTE d'équipes via `teams[]` (Team.productId).
+// La DoD (`DoneCriterion`) reste unique par produit, partagée par toutes ses équipes.
 model Product {
   id             String   @id @default(uuid())
   name           String
@@ -152,11 +155,14 @@ model Increment {
 
 // ---------- Sprint & Événements ----------
 // Séquence stricte : UN SEUL Sprint ouvert (PLANNING/ACTIVE/REVIEW) à la fois
-// par équipe/produit — le suivant est verrouillé tant que le précédent n'est
-// pas CLOSED. La fin est régie par la time-box (endDate) : clôture automatique.
+// PAR ÉQUIPE (teamId) — deux équipes peuvent mener des sprints parallèles
+// distincts sur le même produit. Le verrou `guardStartSprint` /
+// `guardCreateSprint` est évalué POUR CETTE ÉQUIPE SPÉCIFIQUE uniquement.
+// La fin est régie par la time-box (endDate) : clôture automatique.
 
 model Sprint {
   id              String    @id @default(uuid())
+  // Équipe concernée OBLIGATOIRE : identifie quelle équipe réalise ce sprint.
   teamId          String
   team            Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
   // Titre du Sprint : propagé dans les filtres (planning, suivi) et lié aux

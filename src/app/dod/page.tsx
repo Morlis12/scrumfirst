@@ -9,6 +9,7 @@ import {
   toggleCriterion,
 } from "@/app/actions/dod";
 import { ActionForm, Field, inputClass } from "@/components/action-form";
+import { AutoFilterSelect } from "@/components/auto-filter";
 import { Badge, Card, PageHeader, buttonSecondary } from "@/components/ui";
 
 export default async function DodPage({
@@ -59,14 +60,12 @@ export default async function DodPage({
         title={`Definition of Done — ${product.name}`}
         subtitle="DoD unique du produit, partagée par toutes ses équipes. Checklist gérée par l'Admin/PO + SM (Developer exclu) ; cochage ouvert à la Scrum Team. Un item ne devient Increment qu'à 100 %."
         actions={
-          <form method="GET" className="flex gap-2">
-            <select name="product" defaultValue={productId} className={inputClass}>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <button type="submit" className={buttonSecondary}>Changer</button>
-          </form>
+          <AutoFilterSelect
+            name="product"
+            value={productId}
+            options={products}
+            ariaLabel="Produit (applique automatiquement)"
+          />
         }
       />
 

@@ -23,6 +23,7 @@ import {
   updateSprintGoal,
 } from "@/app/actions/planning";
 import { ActionForm, Field, inputClass } from "@/components/action-form";
+import { AutoFilterSelect } from "@/components/auto-filter";
 import { PlanningBoard } from "@/components/planning/planning-board";
 import {
   Badge,
@@ -40,30 +41,11 @@ const STATUS_TONE: Record<string, "zinc" | "blue" | "amber" | "green" | "red"> =
   CANCELLED: "red",
 };
 
-function Picker({
-  name, value, options, submitLabel,
-}: {
-  name: string;
-  value: string;
-  options: { id: string; name: string }[];
-  submitLabel: string;
-}) {
-  return (
-    <form method="GET" className="flex gap-2">
-      <select name={name} defaultValue={value} className={inputClass}>
-        {options.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.name}
-          </option>
-        ))}
-      </select>
-      <button type="submit" className={buttonSecondary}>
-        {submitLabel}
-      </button>
-    </form>
-  );
-}
-
+/**
+ * Filtres automatiques Produit → Équipe → Sprint (sans bouton) :
+ * voir `src/components/auto-filter.tsx`. Changer de produit réinitialise
+ * l'équipe et le sprint ; changer d'équipe réinitialise le sprint.
+ */
 export default async function PlanningPage({
   searchParams,
 }: {
@@ -159,8 +141,20 @@ export default async function PlanningPage({
         subtitle={`Votre rôle dans cette équipe : ${role}${membership?.participatesAsDeveloper ? " (participe comme Developer)" : ""}. Timeboxes calculées au prorata de la durée du Sprint.`}
         actions={
           <div className="flex flex-wrap gap-2">
-            <Picker name="product" value={productId} options={products} submitLabel="Produit" />
-            <Picker name="team" value={teamId} options={teams.map((t) => ({ ...t }))} submitLabel="Équipe" />
+            <AutoFilterSelect
+              name="product"
+              value={productId}
+              options={products}
+              ariaLabel="Produit (applique automatiquement, réinitialise équipe et sprint)"
+              resetParams={["team", "sprint"]}
+            />
+            <AutoFilterSelect
+              name="team"
+              value={teamId}
+              options={teams.map((t) => ({ ...t }))}
+              ariaLabel="Équipe (applique automatiquement, réinitialise le sprint)"
+              resetParams={["sprint"]}
+            />
           </div>
         }
       />
@@ -216,21 +210,15 @@ export default async function PlanningPage({
       <Card className="mb-4">
         <div className="flex flex-col gap-3">
           {sprints.length > 0 && (
-            <form method="GET" className="flex gap-2">
-              <input type="hidden" name="product" value={productId} />
-              <input type="hidden" name="team" value={teamId} />
-              <select name="sprint" defaultValue={sprintId ?? ""} className={inputClass}>
-                {sprints.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.title ?? s.goal ?? "Sprint"} — {s.status} ({new Date(s.startDate).toLocaleDateString("fr-FR")} →{" "}
-                    {new Date(s.endDate).toLocaleDateString("fr-FR")}) · {s._count.backlogItems} item(s)
-                  </option>
-                ))}
-              </select>
-              <button type="submit" className={buttonSecondary}>
-                Voir
-              </button>
-            </form>
+            <AutoFilterSelect
+              name="sprint"
+              value={sprintId ?? ""}
+              options={sprints.map((s) => ({
+                id: s.id,
+                name: `${s.title ?? s.goal ?? "Sprint"} — ${s.status} (${new Date(s.startDate).toLocaleDateString("fr-FR")} → ${new Date(s.endDate).toLocaleDateString("fr-FR")}) · ${s._count.backlogItems} item(s)`,
+              }))}
+              ariaLabel="Sprint suivi (applique automatiquement)"
+            />
           )}
           <details>
             <summary className="cursor-pointer text-sm font-medium">+ Nouveau Sprint (durée ≤ 1 mois{creationLocked ? " — verrouillé tant que le Sprint en cours n'est pas clôturé" : ""} — 1 item READY minimum)</summary>
@@ -242,6 +230,18 @@ export default async function PlanningPage({
                   </p>
                 ) : (
                   <ActionForm action={createSprint.bind(null, teamId)} submitLabel="Créer le Sprint">
+                    <Field
+                      label="Équipe concernée (obligatoire)"
+                      hint="Le verrou de séquence est évalué pour cette équipe : deux équipes peuvent mener des sprints parallèles sur le même produit."
+                    >
+                      <select name="teamId" required defaultValue={teamId} className={inputClass} aria-label="Équipe concernée">
+                        {teams.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
                     <Field label="Titre du Sprint (propagé dans les filtres et lié aux items)">
                       <input name="title" required minLength={3} maxLength={120} className={inputClass} placeholder="Ex. Sprint 12 — Réservation" />
                     </Field>

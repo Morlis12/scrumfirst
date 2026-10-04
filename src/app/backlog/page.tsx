@@ -12,6 +12,7 @@ import {
   setItemStatus,
 } from "@/app/actions/backlog";
 import { ActionForm, Field, inputClass } from "@/components/action-form";
+import { AutoFilterSelect } from "@/components/auto-filter";
 import { Badge, Card, PageHeader, buttonSecondary } from "@/components/ui";
 
 const STATUS_LABEL: Record<string, { label: string; tone: "zinc" | "amber" | "green" | "blue" }> = {
@@ -77,18 +78,12 @@ export default async function BacklogPage({
         title={`Product Backlog — ${product.name}`}
         subtitle={`PO : ${product.productOwner.email}${actor.isProductOwner ? " (vous)" : " — vos créations sont tracées comme saisie déléguée"}. Ordonné par le PO uniquement.`}
         actions={
-          <form method="GET" className="flex gap-2">
-            <select name="product" defaultValue={productId} className={inputClass}>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <button type="submit" className={buttonSecondary}>
-              Changer
-            </button>
-          </form>
+          <AutoFilterSelect
+            name="product"
+            value={productId}
+            options={products}
+            ariaLabel="Produit (applique automatiquement)"
+          />
         }
       />
 

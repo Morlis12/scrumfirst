@@ -5,6 +5,7 @@ import { getMembership } from "@/lib/dal";
 import { compareEventsByScrumOrder, isOpenSprintStatus, isScrumTeamActor } from "@/lib/scrum-rules";
 import { PageHeader, Card, buttonSecondary } from "@/components/ui";
 import { inputClass } from "@/components/ui";
+import { AutoFilterSelect } from "@/components/auto-filter";
 import { SprintKanban } from "@/components/sprint/sprint-kanban";
 import { EventChrono } from "@/components/event-chrono";
 import { DailyScrumTracker } from "@/components/daily-scrum-tracker";
@@ -200,32 +201,20 @@ export default async function SprintPage({
         subtitle="TODO / IN_PROGRESS / REVIEW / DONE en séquence verrouillée (pas de saut). Dernière étape : validez 100 % de la DoD + commentaire de validation obligatoire pour passer en Incrément."
         actions={
           <div className="flex flex-wrap gap-2">
-            <form method="GET" className="flex gap-2">
-              <input type="hidden" name="team" value={teamId} />
-              <select name="product" defaultValue={productId} className={inputClass} aria-label="Produit">
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <button type="submit" className={buttonSecondary}>
-                Produit
-              </button>
-            </form>
-            <form method="GET" className="flex gap-2">
-              <input type="hidden" name="product" value={productId} />
-              <select name="team" defaultValue={teamId} className={inputClass} aria-label="Équipe">
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-              <button type="submit" className={buttonSecondary}>
-                Équipe
-              </button>
-            </form>
+            <AutoFilterSelect
+              name="product"
+              value={productId}
+              options={products}
+              ariaLabel="Produit (applique automatiquement, réinitialise équipe, sprint et suivi)"
+              resetParams={["team", "sprint", "item"]}
+            />
+            <AutoFilterSelect
+              name="team"
+              value={teamId}
+              options={teams}
+              ariaLabel="Équipe (applique automatiquement, réinitialise sprint et suivi)"
+              resetParams={["sprint", "item"]}
+            />
           </div>
         }
       />
@@ -235,21 +224,16 @@ export default async function SprintPage({
           <p className="mb-2 text-sm font-bold text-navy-900">
             Sprint suivi : {(sprint as { title?: string | null })?.title ?? sprint?.goal ?? "—"} · {sprint?.backlogItems.length ?? 0} item(s) rattaché(s)
           </p>
-          <form method="GET" className="flex gap-2">
-            <input type="hidden" name="product" value={productId} />
-            <input type="hidden" name="team" value={teamId} />
-            <select name="sprint" defaultValue={sprintId ?? ""} className={inputClass} aria-label="Sprint">
-                {sprints.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {(s as { title?: string | null }).title ?? s.goal ?? "Sprint"} — {s.status} ({new Date(s.startDate).toLocaleDateString("fr-FR")} →{" "}
-                    {new Date(s.endDate).toLocaleDateString("fr-FR")}) · {s._count.backlogItems} item(s)
-                  </option>
-                ))}
-            </select>
-            <button type="submit" className={buttonSecondary}>
-              Voir
-            </button>
-          </form>
+          <AutoFilterSelect
+            name="sprint"
+            value={sprintId ?? ""}
+            options={sprints.map((s) => ({
+              id: s.id,
+              name: `${(s as { title?: string | null }).title ?? s.goal ?? "Sprint"} — ${s.status} (${new Date(s.startDate).toLocaleDateString("fr-FR")} → ${new Date(s.endDate).toLocaleDateString("fr-FR")}) · ${s._count.backlogItems} item(s)`,
+            }))}
+            ariaLabel="Sprint suivi (applique automatiquement, réinitialise le suivi par item)"
+            resetParams={["item"]}
+          />
         </Card>
       )}
 

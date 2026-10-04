@@ -5,9 +5,8 @@ import {
   Badge,
   Card,
   PageHeader,
-  buttonSecondary,
-  inputClass,
 } from "@/components/ui";
+import { AutoFilterSelect } from "@/components/auto-filter";
 
 type StatusFilter = "all" | "open" | "closed";
 
@@ -46,45 +45,12 @@ function ProgressBar({ value, label }: { value: number; label: string }) {
   );
 }
 
-function FilterForm({
-  name,
-  value,
-  options,
-  hidden,
-  submitLabel,
-  ariaLabel,
-}: {
-  name: string;
-  value: string;
-  options: { id: string; name: string }[];
-  hidden: { name: string; value: string }[];
-  submitLabel: string;
-  ariaLabel: string;
-}) {
-  return (
-    <form method="GET" className="flex gap-2">
-      {hidden.map((h) => (
-        <input key={h.name} type="hidden" name={h.name} value={h.value} />
-      ))}
-      <select name={name} defaultValue={value} className={inputClass} aria-label={ariaLabel}>
-        {options.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.name}
-          </option>
-        ))}
-      </select>
-      <button type="submit" className={buttonSecondary}>
-        {submitLabel}
-      </button>
-    </form>
-  );
-}
-
 /**
  * TABLEAU DE BORD DES MÉTRIQUES — /dashboard
- * Filtres interconnectés (Produit → Équipe → Statut → Sprint) via formulaires
- * GET : chaque liste dépend du choix précédent, résolu côté serveur avec
- * repli sur la première option valide.
+ * Filtres automatiques interconnectés (Produit → Équipe → Statut → Sprint),
+ * sans bouton : chaque sélection s'applique aussitôt et réinitialise les
+ * sous-filtres concernés, résolus côté serveur avec repli sur la première
+ * option valide.
  * - Avancement du Sprint : % de Story Points DONE / total du Sprint courant.
  * - Santé du Product Backlog : items hors Sprint + somme des SP restants.
  * - Qualité DoD : taux moyen de réussite + retours au backlog (rejets).
@@ -278,48 +244,36 @@ export default async function DashboardPage({
       <Card className="mb-4">
         <h2 className="mb-2 font-semibold text-navy-900">Filtres</h2>
         <div className="grid gap-2 md:grid-cols-2">
-          <FilterForm
+          <AutoFilterSelect
             name="product"
             value={productId}
             options={products}
-            hidden={[]}
-            submitLabel="Produit"
-            ariaLabel="Produit"
+            ariaLabel="Produit (applique automatiquement, réinitialise équipe et sprint)"
+            resetParams={["team", "sprint"]}
           />
-          <FilterForm
+          <AutoFilterSelect
             name="team"
             value={teamId}
             options={teams.map((t) => ({ ...t }))}
-            hidden={[{ name: "product", value: productId }]}
-            submitLabel="Équipe"
-            ariaLabel="Équipe"
+            ariaLabel="Équipe (applique automatiquement, réinitialise le sprint)"
+            resetParams={["sprint"]}
           />
-          <FilterForm
+          <AutoFilterSelect
             name="status"
             value={statusFilter}
             options={STATUS_OPTIONS}
-            hidden={[
-              { name: "product", value: productId },
-              { name: "team", value: teamId },
-            ]}
-            submitLabel="Statut"
-            ariaLabel="Statut du Sprint"
+            ariaLabel="Statut du Sprint (applique automatiquement, réinitialise le sprint)"
+            resetParams={["sprint"]}
           />
           {scopedSprints.length > 0 && sprintId ? (
-            <FilterForm
+            <AutoFilterSelect
               name="sprint"
               value={sprintId}
               options={scopedSprints.map((s) => ({
                 id: s.id,
                 name: `${("title" in s && typeof s.title === "string" && s.title) || s.goal || "Sprint"} — ${s.status}`,
               }))}
-              hidden={[
-                { name: "product", value: productId },
-                { name: "team", value: teamId },
-                { name: "status", value: statusFilter },
-              ]}
-              submitLabel="Sprint"
-              ariaLabel="Sprint courant"
+              ariaLabel="Sprint courant (applique automatiquement)"
             />
           ) : (
             <p className="rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">

@@ -44,8 +44,24 @@ export async function createSprint(
   _state: { error?: string } | undefined,
   formData: FormData,
 ) {
+  // Équipe concernée OBLIGATOIRE : lue depuis le <select name="teamId"> du
+  // formulaire (repli sur l'équipe courante de la page). La garde de séquence
+  // est évaluée POUR CETTE ÉQUIPE SPÉCIFIQUE → sprints parallèles autorisés.
+  const requestedTeamId = String(formData.get("teamId") ?? "").trim() || teamId;
+  const boundTeam = await prisma.team.findUnique({
+    where: { id: teamId },
+    select: { productId: true },
+  });
+  const targetTeam = await prisma.team.findUnique({
+    where: { id: requestedTeamId },
+    select: { id: true, productId: true },
+  });
+  if (!boundTeam || !targetTeam || targetTeam.productId !== boundTeam.productId) {
+    return { error: "Équipe concernée invalide : choisissez une équipe de ce produit." };
+  }
+  const effectiveTeamId = targetTeam.id;
   const userId = await currentUserId();
-  await requireTeamMember(userId, teamId);
+  await requireTeamMember(userId, effectiveTeamId);
   const parsed = SprintSchema.safeParse({
     title: formData.get("title"),
     goal: formData.get("goal"),
@@ -70,13 +86,14 @@ export async function createSprint(
   }
 
   // Time-box d'abord : les Sprints expirés sont clôturés automatiquement,
-  // puis la séquence stricte s'applique (un seul Sprint ouvert à la fois).
-  await autoCloseExpiredSprints(teamId);
-  const seq = await guardCreateSprint(teamId);
+  // puis la séquence stricte s'applique POUR L'ÉQUIPE CONCERNÉE (parallélisme
+  // inter-équipes autorisé sur le même produit).
+  await autoCloseExpiredSprints(effectiveTeamId);
+  const seq = await guardCreateSprint(effectiveTeamId);
   if (!seq.ok) return { error: seq.message };
 
   const team = await prisma.team.findUnique({
-    where: { id: teamId },
+    where: { id: effectiveTeamId },
     select: { productId: true },
   });
   if (!team) return { error: "Équipe introuvable." };
@@ -102,7 +119,7 @@ export async function createSprint(
   const days = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
   const sprint = await prisma.sprint.create({
     data: {
-      teamId,
+      teamId: effectiveTeamId,
       title: parsed.data.title,
       goal: parsed.data.goal,
       status: "PLANNING",

@@ -9,6 +9,7 @@ import {
   togglePlannedAction,
 } from "@/app/actions/retrospective";
 import { Badge, Card, PageHeader, buttonSecondary, inputClass } from "@/components/ui";
+import { AutoFilterSelect } from "@/components/auto-filter";
 
 const IDEA_COLUMNS: {
   id: (typeof RETRO_IDEA_COLUMNS)[number];
@@ -132,34 +133,20 @@ export default async function RetrospectivePage({
         subtitle={`Votre rôle dans cette équipe : ${membership?.role ?? "—"}. Idées et actions persistées en base pour le sprint concerné.`}
         actions={
           <div className="flex flex-wrap gap-2">
-            <form method="GET" className="flex gap-2">
-              <input type="hidden" name="team" value={teamId} />
-              {sprintId && <input type="hidden" name="sprint" value={sprintId} />}
-              <select name="product" defaultValue={productId} className={inputClass} aria-label="Produit">
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <button type="submit" className={buttonSecondary}>
-                Produit
-              </button>
-            </form>
-            <form method="GET" className="flex gap-2">
-              <input type="hidden" name="product" value={productId} />
-              {sprintId && <input type="hidden" name="sprint" value={sprintId} />}
-              <select name="team" defaultValue={teamId} className={inputClass} aria-label="Équipe">
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-              <button type="submit" className={buttonSecondary}>
-                Équipe
-              </button>
-            </form>
+            <AutoFilterSelect
+              name="product"
+              value={productId}
+              options={products}
+              ariaLabel="Produit (applique automatiquement, réinitialise équipe et sprint)"
+              resetParams={["team", "sprint"]}
+            />
+            <AutoFilterSelect
+              name="team"
+              value={teamId}
+              options={teams}
+              ariaLabel="Équipe (applique automatiquement, réinitialise le sprint)"
+              resetParams={["sprint"]}
+            />
           </div>
         }
       />
@@ -175,22 +162,15 @@ export default async function RetrospectivePage({
 
       {sprints.length > 0 && (
         <Card className="mb-4">
-          <form method="GET" className="flex gap-2">
-            <input type="hidden" name="product" value={productId} />
-            <input type="hidden" name="team" value={teamId} />
-            <select name="sprint" defaultValue={sprintId ?? ""} className={inputClass} aria-label="Sprint">
-              {sprints.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {("title" in s && typeof s.title === "string" && s.title) || s.goal || "Sprint"} — {s.status} (
-                  {new Date(s.startDate).toLocaleDateString("fr-FR")} →{" "}
-                  {new Date(s.endDate).toLocaleDateString("fr-FR")}) · {s._count.backlogItems} item(s)
-                </option>
-              ))}
-            </select>
-            <button type="submit" className={buttonSecondary}>
-              Voir
-            </button>
-          </form>
+          <AutoFilterSelect
+            name="sprint"
+            value={sprintId ?? ""}
+            options={sprints.map((s) => ({
+              id: s.id,
+              name: `${("title" in s && typeof s.title === "string" && s.title) || s.goal || "Sprint"} — ${s.status} (${new Date(s.startDate).toLocaleDateString("fr-FR")} → ${new Date(s.endDate).toLocaleDateString("fr-FR")}) · ${s._count.backlogItems} item(s)`,
+            }))}
+            ariaLabel="Sprint concerné (applique automatiquement)"
+          />
         </Card>
       )}
 

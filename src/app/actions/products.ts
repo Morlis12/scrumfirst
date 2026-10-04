@@ -62,6 +62,61 @@ export async function createProductWithTeam(
 }
 
 /**
+ * Déclare une NOUVELLE équipe autorisée sur un produit existant (multi-équipes).
+ * Champ texte libre : le produit accepte une liste d'équipes (Team.productId).
+ * Accès : Product Owner du produit, Admin global, ou Scrum Master membre du produit.
+ * Doublon de nom (insensible à la casse) refusé pour garder des tags lisibles.
+ */
+export async function addTeamToProduct(
+  productId: string,
+  _state: ProductsActionState,
+  formData: FormData,
+): Promise<ProductsActionState> {
+  const userId = await currentUserId();
+  const name = String(formData.get("name") ?? formData.get("teamName") ?? "").trim();
+  if (name.length < 2) return { error: "Nom d'équipe : 2 caractères minimum." };
+  if (name.length > 200) return { error: "Nom d'équipe : 200 caractères maximum." };
+  const [product, user] = await Promise.all([
+    prisma.product.findUnique({
+      where: { id: productId },
+      select: {
+        id: true,
+        name: true,
+        productOwnerId: true,
+        teams: { select: { name: true } },
+      },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { globalRole: true },
+    }),
+  ]);
+  if (!product) return { error: "Produit introuvable." };
+  const smMembership = await prisma.teamMembership.findFirst({
+    where: { userId, role: "SCRUM_MASTER", team: { productId } },
+    select: { id: true },
+  });
+  const allowed =
+    product.productOwnerId === userId ||
+    user?.globalRole === "ADMIN" ||
+    smMembership != null;
+  if (!allowed) {
+    return { error: "Déclaration d'équipe réservée au Product Owner, à l'Admin ou au Scrum Master du produit." };
+  }
+  const duplicate = product.teams.some(
+    (t) => t.name.trim().toLowerCase() === name.toLowerCase(),
+  );
+  if (duplicate) return { error: `L'équipe « ${name} » est déjà déclarée sur ce produit.` };
+  const team = await prisma.team.create({
+    data: { name, productId: product.id },
+  });
+  revalidatePath("/products");
+  revalidatePath("/planning");
+  revalidatePath("/sprint");
+  return { message: `Équipe « ${team.name} » déclarée sur le produit « ${product.name} ».` };
+}
+
+/**
  * Suppression définitive d'un critère DoD global du produit.
  * Garde métier : Admin/PO + Scrum Master (guardManageDodCriteria, Developer exclu).
  * Les DoneCheck déjà cochés sont supprimés en cascade via deleteMany explicite

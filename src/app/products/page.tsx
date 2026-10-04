@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { currentUserId } from "@/lib/context";
 import { guardCreateProduct, resolveProductActor } from "@/lib/scrum-guards";
+import { addTeamToProduct } from "@/app/actions/products";
+import { ActionForm, Field, inputClass } from "@/components/action-form";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { ProductCreateForm } from "@/components/products/product-create-form";
 import { DodConfigPanel } from "@/components/products/dod-config-panel";
@@ -73,8 +75,42 @@ export default async function ProductsPage() {
                 </Badge>
               </div>
               <p className="mt-1 text-xs text-navy-900/60">
-                Équipes : {p.teams.map((t) => t.name).join(" · ") || "—"}
+                Équipes autorisées ({p.teams.length}) : {p.teams.map((t) => t.name).join(" · ") || "—"}
               </p>
+              <div className="mt-1 flex flex-wrap gap-1.5" aria-label="Équipes autorisées">
+                {p.teams.map((t) => (
+                  <span
+                    key={t.id}
+                    className="rounded-lg bg-sand-300 px-2 py-1 text-xs font-bold text-navy-900"
+                  >
+                    {t.name}
+                  </span>
+                ))}
+              </div>
+              {/* Déclaration multi-équipes : champ texte libre (tags). */}
+              <details className="mt-2">
+                <summary className="cursor-pointer text-sm font-bold text-navy-900">
+                  + Déclarer une équipe sur ce produit
+                </summary>
+                <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 p-3">
+                  <ActionForm action={addTeamToProduct.bind(null, p.id)} submitLabel="Déclarer l'équipe">
+                    <Field
+                      label="Nom de la nouvelle équipe (texte libre)"
+                      hint="Le produit accepte plusieurs équipes : chacune pourra mener ses propres sprints parallèles."
+                    >
+                      <input
+                        name="name"
+                        required
+                        minLength={2}
+                        maxLength={200}
+                        className={inputClass}
+                        placeholder="Ex. Équipe Beta"
+                        autoComplete="off"
+                      />
+                    </Field>
+                  </ActionForm>
+                </div>
+              </details>
               <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-3">
                 <DodConfigPanel
                   productId={p.id}

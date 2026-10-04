@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { currentUserId, getMyProducts } from "@/lib/context";
-import { Badge, Card, PageHeader, buttonSecondary, inputClass } from "@/components/ui";
+import { Badge, Card, PageHeader } from "@/components/ui";
+import { AutoFilterSelect } from "@/components/auto-filter";
 import { dailyNoteTitleFor } from "@/lib/daily-notes";
 
 const SPRINT_TONE: Record<string, "zinc" | "blue" | "amber" | "green" | "red"> = {
@@ -199,75 +200,42 @@ export default async function HistoryPage({
       {/* ---------- Panneau de sélection compact (Produit → Sprint) ---------- */}
       <Card className="mb-4">
         <div className="grid gap-2 md:grid-cols-2">
-          <form method="GET" className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5">
             <label htmlFor="history-product" className="text-xs font-bold text-navy-900">
               Produit ({products.length})
             </label>
-            <div className="flex gap-2">
-              <select
-                id="history-product"
-                name="product"
-                defaultValue={productId ?? ""}
-                className={`${inputClass} ${productId ? "font-bold" : ""}`}
-                aria-label="Sélectionner un produit"
-              >
-                <option value="" disabled>
-                  Sélectionner un produit...
-                </option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <button type="submit" className={buttonSecondary}>
-                Choisir
-              </button>
-            </div>
-          </form>
-          <form method="GET" className="flex flex-col gap-1.5">
+            <AutoFilterSelect
+              id="history-product"
+              name="product"
+              value={productId ?? ""}
+              options={products}
+              ariaLabel="Sélectionner un produit (applique automatiquement, réinitialise le sprint)"
+              resetParams={["sprint"]}
+              placeholder="Sélectionner un produit..."
+              boldWhenSelected
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
             <label htmlFor="history-sprint" className="text-xs font-bold text-navy-900">
               Sprint {productId ? `(${sprints.length})` : ""}
             </label>
-            <div className="flex gap-2">
-              <input type="hidden" name="product" value={productId ?? ""} />
-              <select
-                id="history-sprint"
-                name="sprint"
-                defaultValue={sprintId ?? ""}
-                disabled={!productId || sprints.length === 0}
-                className={`${inputClass} ${sprintId ? "font-bold" : ""} disabled:opacity-50`}
-                aria-label="Sélectionner un sprint"
-                title={
-                  !productId
-                    ? "Choisissez d'abord un produit"
-                    : sprints.length === 0
-                      ? "Aucun sprint pour ce produit"
-                      : "Sélectionner un sprint"
-                }
-              >
-                <option value="" disabled>
-                  {!productId
-                    ? "Sélectionnez d'abord un produit..."
-                    : sprints.length === 0
-                      ? "Aucun sprint pour ce produit"
-                      : "Sélectionner un sprint..."}
-                </option>
-                {sprints.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {sprintOptionLabel(s)}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="submit"
-                disabled={!productId || sprints.length === 0}
-                className={buttonSecondary}
-              >
-                Voir
-              </button>
-            </div>
-          </form>
+            <AutoFilterSelect
+              id="history-sprint"
+              name="sprint"
+              value={sprintId ?? ""}
+              options={sprints.map((s) => ({ id: s.id, name: sprintOptionLabel(s) }))}
+              ariaLabel="Sélectionner un sprint (applique automatiquement)"
+              disabled={!productId || sprints.length === 0}
+              placeholder={
+                !productId
+                  ? "Sélectionnez d'abord un produit..."
+                  : sprints.length === 0
+                    ? "Aucun sprint pour ce produit"
+                    : "Sélectionner un sprint..."
+              }
+              boldWhenSelected
+            />
+          </div>
         </div>
         {productId && sprints.length === 0 && (
           <p className="mt-2 rounded-lg bg-sand-300 p-2 text-xs font-bold text-navy-900">
