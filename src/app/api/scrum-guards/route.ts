@@ -340,7 +340,9 @@ function runPureMatrix() {
 
 async function runDbBackedMatrix() {
   const tag = `guard-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-  const passwordHash = await bcrypt.hash("change-me-guard-fixture", 10);
+  // Mot de passe éphémère aléatoire pour les fixtures de test (jamais versionné).
+  const { randomUUID } = await import("node:crypto");
+  const passwordHash = await bcrypt.hash(`guard-${randomUUID()}`, 10);
   const mkUser = (role: string) =>
     prisma.user.create({
       data: {

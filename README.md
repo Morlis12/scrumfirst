@@ -11,14 +11,18 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
-Comptes de démonstration (créés par le seed) :
+Comptes de démonstration (créés par le seed, domaine `.local` non routable) :
 
 | Email                | Mot de passe | Rôle équipe    |
 |----------------------|--------------|----------------|
-| admin@scrumfirst.local | change-me-seed-admin | PRODUCT_OWNER (+ ADMIN global) |
-| sm@scrumfirst.local    | change-me-seed-sm    | SCRUM_MASTER   |
-| dev@scrumfirst.local   | change-me-seed-dev   | DEVELOPER      |
-| sh@scrumfirst.local    | change-me-seed-sh    | STAKEHOLDER (lecture seule) |
+| admin@scrumfirst.local | `SEED_ADMIN_PASSWORD` | PRODUCT_OWNER (+ ADMIN global) |
+| sm@scrumfirst.local    | `SEED_SM_PASSWORD`    | SCRUM_MASTER   |
+| dev@scrumfirst.local   | `SEED_DEV_PASSWORD`   | DEVELOPER      |
+| sh@scrumfirst.local    | `SEED_SH_PASSWORD`    | STAKEHOLDER (lecture seule) |
+
+> Les mots de passe ne sont jamais versionnés : définissez
+> `SEED_ADMIN_PASSWORD`, `SEED_SM_PASSWORD`, `SEED_DEV_PASSWORD`,
+> `SEED_SH_PASSWORD` dans votre `.env` local (voir `.env.example`).
 
 ## Base de données (workflow `db push`, sans migrations)
 

@@ -1,21 +1,44 @@
 /**
  * Seed de démonstration — idempotent (upserts).
  * Usage : npm run seed
- * Comptes : admin@scrumfirst.local / change-me-seed-admin (ADMIN + PO)
- *           dev@scrumfirst.local   / change-me-seed-dev   (DEVELOPER)
- *           sm@scrumfirst.local    / change-me-seed-sm    (SCRUM_MASTER)
- *           sh@scrumfirst.local    / change-me-seed-sh    (STAKEHOLDER)
+ * Comptes créés (emails de démo, domaine .local non routable) :
+ *           admin@scrumfirst.local (ADMIN + PO)
+ *           dev@scrumfirst.local   (DEVELOPER)
+ *           sm@scrumfirst.local    (SCRUM_MASTER)
+ *           sh@scrumfirst.local    (STAKEHOLDER)
+ * Mots de passe : lus depuis l'environnement, JAMAIS en dur ici.
+ * Variables requises : SEED_ADMIN_PASSWORD, SEED_DEV_PASSWORD,
+ *                      SEED_SM_PASSWORD, SEED_SH_PASSWORD.
+ * Voir .env.example.
  */
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
+const REQUIRED_SEED_PASSWORDS = [
+  "SEED_ADMIN_PASSWORD",
+  "SEED_DEV_PASSWORD",
+  "SEED_SM_PASSWORD",
+  "SEED_SH_PASSWORD",
+] as const;
+
+function requiredSeedPassword(name: (typeof REQUIRED_SEED_PASSWORDS)[number]): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Variable d'environnement manquante : ${name} (voir .env.example). ` +
+        `Les mots de passe du seed ne sont jamais versionnés.`,
+    );
+  }
+  return value;
+}
+
 const USERS = [
-  { email: "admin@scrumfirst.local", name: "Alex PO", password: "change-me-seed-admin", globalRole: "ADMIN", teamRole: "PRODUCT_OWNER" },
-  { email: "dev@scrumfirst.local", name: "Dana Dev", password: "change-me-seed-dev", globalRole: "MEMBER", teamRole: "DEVELOPER" },
-  { email: "sm@scrumfirst.local", name: "Sam SM", password: "change-me-seed-sm", globalRole: "MEMBER", teamRole: "SCRUM_MASTER" },
-  { email: "sh@scrumfirst.local", name: "Sacha SH", password: "change-me-seed-sh", globalRole: "MEMBER", teamRole: "STAKEHOLDER" },
+  { email: "admin@scrumfirst.local", name: "Alex PO", password: requiredSeedPassword("SEED_ADMIN_PASSWORD"), globalRole: "ADMIN", teamRole: "PRODUCT_OWNER" },
+  { email: "dev@scrumfirst.local", name: "Dana Dev", password: requiredSeedPassword("SEED_DEV_PASSWORD"), globalRole: "MEMBER", teamRole: "DEVELOPER" },
+  { email: "sm@scrumfirst.local", name: "Sam SM", password: requiredSeedPassword("SEED_SM_PASSWORD"), globalRole: "MEMBER", teamRole: "SCRUM_MASTER" },
+  { email: "sh@scrumfirst.local", name: "Sacha SH", password: requiredSeedPassword("SEED_SH_PASSWORD"), globalRole: "MEMBER", teamRole: "STAKEHOLDER" },
 ];
 
 async function main() {

@@ -30,8 +30,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files — seul .env.example (placeholders) est versionné, jamais les vrais secrets
+.env
+.env.local
+.env.*.local
+!.env.example
 
 # vercel
 .vercel
@@ -39,6 +42,4 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-node_modules/
 dist/
-.env
