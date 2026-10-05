@@ -161,21 +161,31 @@ export async function resolveGoal(
 }
 
 export async function createProduct(_state: ActionState, formData: FormData): Promise<ActionState> {
+  const { currentWorkspaceId } = await import("@/lib/context");
+  const workspaceId = await currentWorkspaceId();
   const userId = await currentUserId();
   const { guardCreateProduct } = await import("@/lib/scrum-guards");
   const allowed = await guardCreateProduct(userId);
   if (!allowed.ok) return { error: allowed.message };
   const name = String(formData.get("name") ?? "").trim();
+  const productOwnerEmail = String(formData.get("productOwnerEmail") ?? "").trim().toLowerCase();
+  const scrumMasterEmail = String(formData.get("scrumMasterEmail") ?? "").trim().toLowerCase();
   if (name.length < 3) return { error: "Nom de produit trop court." };
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(productOwnerEmail)) {
+    return { error: "Email du Product Owner invalide." };
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(scrumMasterEmail)) {
+    return { error: "Email du Scrum Master invalide." };
+  }
   const product = await prisma.product.create({
-    data: { name, productOwnerId: userId },
+    data: { name, productOwnerId: userId, productOwnerEmail, scrumMasterEmail, workspaceId },
   });
   const team = await prisma.team.create({
-    data: { name: "Équipe 1", productId: product.id },
+    data: { name: "Équipe 1", productId: product.id, members: [], workspaceId },
   });
   await prisma.teamMembership.create({
     data: { userId, teamId: team.id, role: "PRODUCT_OWNER" },
   });
   revalidatePath("/backlog");
-  return { message: `Produit « ${name} » créé (vous êtes Product Owner).` };
+  return { message: `Produit « ${name} » créé (PO ${productOwnerEmail} · SM ${scrumMasterEmail}).` };
 }

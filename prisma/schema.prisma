@@ -7,6 +7,25 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// ---------- Multi-tenant commercial ----------
+// Chaque client dispose d'un Espace de travail (Workspace) cloisonné et
+// vierge : un utilisateur ne voit QUE le travail de son propre Workspace.
+// `workspaceId` est obligatoire sur User, Product, Team et Sprint ; toutes
+// les requêtes de l'application filtrent par le workspace de l'utilisateur
+// connecté (voir `requireWorkspace` dans src/lib/context.ts).
+
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+
+  users    User[]
+  products Product[]
+  teams    Team[]
+  sprints  Sprint[]
+}
+
 // ---------- Core ----------
 
 model User {
@@ -15,6 +34,11 @@ model User {
   name         String?
   passwordHash String
   globalRole   String   @default("MEMBER") // ADMIN, MEMBER
+  // Rôle dans l'équipe de base de l'espace : OWNER (créateur), SCRUM_MASTER,
+  // DEVELOPER, STAKEHOLDER, MEMBER. Sert à rattacher le pack aux équipes.
+  spaceRole    String   @default("MEMBER")
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdAt    DateTime @default(now())
 
   memberships   TeamMembership[]
@@ -31,12 +55,25 @@ model User {
 // Produit NEUTRE multi-équipes : aucun `teamId` unique ici.
 // Un produit accepte UNE LISTE d'équipes via `teams[]` (Team.productId).
 // La DoD (`DoneCriterion`) reste unique par produit, partagée par toutes ses équipes.
+//
+// CENTRALISATION PO/SM (Scrum Guide) : un seul Product Owner et un seul
+// Scrum Master par Produit, hérités par défaut par toutes ses équipes.
+// - `productOwnerEmail` : PO du produit (saisi à la création, obligatoire)
+// - `scrumMasterEmail`  : SM du produit (saisi à la création, obligatoire)
+// `productOwnerId` est conservé pour compatibilité (résolution d'acteur / gardes).
 model Product {
-  id             String   @id @default(uuid())
-  name           String
-  productOwnerId String
-  productOwner   User     @relation("ProductOwner", fields: [productOwnerId], references: [id])
-  createdAt      DateTime @default(now())
+  id                String   @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name              String
+  productOwnerId    String
+  productOwner      User     @relation("ProductOwner", fields: [productOwnerId], references: [id])
+  // Gouvernance PROPRE au produit (saisie obligatoire à la création, par
+  // département). Toutes les équipes du produit héritent de ce binôme,
+  // de manière non modifiable — seuls des Développeurs s'y ajoutent.
+  productOwnerEmail String
+  scrumMasterEmail  String
+  createdAt         DateTime @default(now())
 
   teams        Team[]
   backlogItems BacklogItem[]
@@ -56,10 +93,20 @@ model ProductGoal {
 
 model Team {
   id          String   @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   productId   String
   product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   name        String
   createdAt   DateTime @default(now())
+
+  // COMPOSITION ÉQUIPE — rôle exclusif DEVELOPER.
+  // Stocke les membres spécifiques de l'équipe (noms/emails, un par un).
+  // Le PO et le SM ne sont JAMAIS stockés ici : ils sont hérités du Produit
+  // (Product.productOwnerEmail / Product.scrumMasterEmail).
+  // CONTRAT DES 10 MEMBRES (Scrum Guide) : 1 PO + 1 SM + max 8 Developers.
+  // Donc `members.length <= 8` strict, total bloqué à 10 maximum.
+  members String[] @default([])
 
   memberships TeamMembership[]
   sprints     Sprint[]
@@ -162,6 +209,8 @@ model Increment {
 
 model Sprint {
   id              String    @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // Équipe concernée OBLIGATOIRE : identifie quelle équipe réalise ce sprint.
   teamId          String
   team            Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)

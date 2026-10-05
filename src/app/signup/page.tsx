@@ -7,10 +7,11 @@ export default function SignupPage() {
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-4 py-10">
       <Card>
         <h1 className="text-xl font-semibold text-navy-900">
-          Créer un compte
+          Créer mon espace de travail
         </h1>
         <p className="mt-1 text-sm text-navy-900/70">
-          Le premier compte créé devient administrateur.
+          Vous devenez Product Owner de votre espace, avec une équipe de base
+          (SM, développeurs, stakeholder) aux identifiants temporaires.
         </p>
         <div className="mt-5">
           <SignupForm />

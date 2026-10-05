@@ -12,6 +12,174 @@ export const TEAM_ROLES = {
 } as const;
 export type TeamRole = (typeof TEAM_ROLES)[keyof typeof TEAM_ROLES];
 
+// ---------- Gouvernance par produit + contrat des 10 membres (Scrum Guide) ----------
+// Chaque produit porte SON binôme PO/SM (saisi à la création, selon le
+// département qui le gère). Les équipes en héritent, de manière non
+// modifiable — seuls des Développeurs s'y ajoutent (rôle exclusif).
+
+/** Binôme de gouvernance propre à un produit. */
+export type ProductLeadership = {
+  productOwnerEmail: string;
+  scrumMasterEmail: string;
+};
+/** Maximum de Développeurs spécifiques par équipe (rôle exclusif DEVELOPER). */
+export const MAX_DEVELOPERS_PER_TEAM = 8;
+/** Taille maximale de l'équipe : 1 PO + 1 SM + 8 Developers. */
+export const MAX_SCRUM_TEAM_SIZE = 10;
+/** Message de blocage strict affiché côté UI et retourné côté Action. */
+export const TEAM_LIMIT_MESSAGE =
+  "🚫 Limite de 8 développeurs atteinte (Total de 10 membres avec le PO et le SM conforme au Scrum Guide)";
+
+/** Leadership d'un produit (emails saisis à la création, obligatoires). */
+export function getProductLeadership(product: {
+  productOwnerEmail: string;
+  scrumMasterEmail: string;
+}): ProductLeadership {
+  return {
+    productOwnerEmail: product.productOwnerEmail.trim(),
+    scrumMasterEmail: product.scrumMasterEmail.trim(),
+  };
+}
+
+/** Normalise une saisie développeur (nom ou email, un par un). */
+export function normalizeDeveloperEntry(entry: string): string {
+  return entry.trim().replace(/\s+/g, " ").slice(0, 200);
+}
+
+/** Vérifie qu'une entrée n'est pas le PO ou le SM DU PRODUIT (héritage, non modifiable). */
+export function isLeadershipEmail(
+  entry: string,
+  productOwnerEmail: string,
+  scrumMasterEmail: string,
+): boolean {
+  const lowered = entry.trim().toLowerCase();
+  return (
+    lowered === productOwnerEmail.trim().toLowerCase() ||
+    lowered === scrumMasterEmail.trim().toLowerCase()
+  );
+}
+
+/** Résumé de composition : développeurs, total global, places restantes. */
+export function teamCompositionSummary(developerCount: number): {
+  developers: number;
+  total: number;
+  remaining: number;
+  isFull: boolean;
+} {
+  const developers = Math.max(0, Math.floor(developerCount));
+  return {
+    developers,
+    total: 2 + developers,
+    remaining: Math.max(0, MAX_DEVELOPERS_PER_TEAM - developers),
+    isFull: developers >= MAX_DEVELOPERS_PER_TEAM,
+  };
+}
+
+/** Garde pure : peut-on encore ajouter un développeur à cette équipe ? */
+export function canAddDeveloperToTeam(currentDeveloperCount: number): GuardResult {
+  if (currentDeveloperCount >= MAX_DEVELOPERS_PER_TEAM) {
+    return deny("TEAM_SIZE_LIMIT", TEAM_LIMIT_MESSAGE);
+  }
+  return allow();
+}
+
+/**
+ * Valide une liste complète de développeurs (création d'équipe) :
+ * - max 8, rôle exclusif DEVELOPER (le PO/SM DU PRODUIT est refusé ici),
+ * - entrées 2–200 caractères, sans doublon insensible à la casse.
+ */
+export function validateDevelopersList(
+  members: string[],
+  leadership: ProductLeadership,
+): GuardResult {
+  if (members.length > MAX_DEVELOPERS_PER_TEAM) {
+    return deny("TEAM_SIZE_LIMIT", TEAM_LIMIT_MESSAGE);
+  }
+  const seen = new Set<string>();
+  for (const raw of members) {
+    const entry = normalizeDeveloperEntry(raw);
+    if (entry.length < 2) {
+      return deny(
+        "DEVELOPER_ENTRY_INVALID",
+        "Chaque développeur : 2 caractères minimum (nom ou email).",
+      );
+    }
+    if (entry.length > 200) {
+      return deny(
+        "DEVELOPER_ENTRY_INVALID",
+        "Chaque développeur : 200 caractères maximum.",
+      );
+    }
+    if (
+      isLeadershipEmail(
+        entry,
+        leadership.productOwnerEmail,
+        leadership.scrumMasterEmail,
+      )
+    ) {
+      return deny(
+        "LEADERSHIP_IMMUTABLE",
+        "Le Product Owner et le Scrum Master sont hérités du produit — ajoutez uniquement des Développeurs.",
+      );
+    }
+    const key = entry.toLowerCase();
+    if (seen.has(key)) {
+      return deny(
+        "DEVELOPER_DUPLICATE",
+        `Développeur en double : « ${entry} ».`,
+      );
+    }
+    seen.add(key);
+  }
+  return allow();
+}
+
+/**
+ * Valide l'ajout unitaire d'un développeur à une équipe existante.
+ * Retourne l'entrée normalisée si valide.
+ */
+export function validateSingleDeveloper(
+  entry: string,
+  currentMembers: string[],
+  leadership: ProductLeadership,
+): { ok: true; normalized: string } | { ok: false; code: string; message: string } {
+  const normalized = normalizeDeveloperEntry(entry);
+  if (normalized.length < 2) {
+    return {
+      ok: false,
+      code: "DEVELOPER_ENTRY_INVALID",
+      message: "Nom/email du développeur : 2 caractères minimum.",
+    };
+  }
+  if (
+    isLeadershipEmail(
+      normalized,
+      leadership.productOwnerEmail,
+      leadership.scrumMasterEmail,
+    )
+  ) {
+    return {
+      ok: false,
+      code: "LEADERSHIP_IMMUTABLE",
+      message:
+        "Le Product Owner et le Scrum Master sont hérités du produit — ajoutez uniquement des Développeurs.",
+    };
+  }
+  const duplicate = currentMembers.some(
+    (m) => m.trim().toLowerCase() === normalized.toLowerCase(),
+  );
+  if (duplicate) {
+    return {
+      ok: false,
+      code: "DEVELOPER_DUPLICATE",
+      message: `« ${normalized} » est déjà développeur de cette équipe.`,
+    };
+  }
+  const size = canAddDeveloperToTeam(currentMembers.length);
+  if (!size.ok) return size;
+  return { ok: true, normalized };
+}
+
 export const ITEM_STATUS = {
   RAW: "RAW", // brut
   REFINED: "REFINED", // affiné

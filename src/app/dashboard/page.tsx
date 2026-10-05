@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { currentUserId, getMyProducts, getProductTeams } from "@/lib/context";
+import { currentUserId, getMyProducts, getProductTeams, requireWorkspace } from "@/lib/context";
 import { isOpenSprintStatus } from "@/lib/scrum-rules";
 import {
   Badge,
@@ -79,7 +79,8 @@ export default async function DashboardPage({
     params.product !== undefined && products.some((p) => p.id === params.product)
       ? (params.product as string)
       : (firstProduct?.id ?? "");
-  const teams = await getProductTeams(productId);
+  const { workspaceId } = await requireWorkspace();
+  const teams = await getProductTeams(productId, workspaceId);
   if (teams.length === 0) {
     return (
       <main className="mx-auto w-full max-w-6xl px-4 py-6">
@@ -96,7 +97,7 @@ export default async function DashboardPage({
   const statusFilter = parseStatusFilter(params.status);
 
   const sprints = await prisma.sprint.findMany({
-    where: { teamId },
+    where: { teamId, workspaceId },
     orderBy: { createdAt: "desc" },
   });
   const scopedSprints =
@@ -116,7 +117,7 @@ export default async function DashboardPage({
   const [sprintItems, scopedItems, backlogItems, activeCriteria] = await Promise.all([
     sprintId
       ? prisma.backlogItem.findMany({
-          where: { sprintId },
+          where: { sprintId, sprint: { workspaceId } },
           select: {
             id: true,
             title: true,
@@ -132,7 +133,7 @@ export default async function DashboardPage({
       : [],
     scopedSprintIds.length > 0
       ? prisma.backlogItem.findMany({
-          where: { sprintId: { in: scopedSprintIds } },
+          where: { sprintId: { in: scopedSprintIds }, sprint: { workspaceId } },
           select: {
             id: true,
             title: true,
@@ -147,7 +148,7 @@ export default async function DashboardPage({
         })
       : [],
     prisma.backlogItem.findMany({
-      where: { productId, sprintId: null },
+      where: { productId, sprintId: null, product: { workspaceId } },
       select: {
         id: true,
         status: true,
@@ -160,7 +161,7 @@ export default async function DashboardPage({
       orderBy: { order: "asc" },
     }),
     prisma.doneCriterion.findMany({
-      where: { productId, active: true },
+      where: { productId, active: true, product: { workspaceId } },
       select: { id: true },
     }),
   ]);

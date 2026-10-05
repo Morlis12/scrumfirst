@@ -48,19 +48,20 @@ export async function createSprint(
   // formulaire (repli sur l'équipe courante de la page). La garde de séquence
   // est évaluée POUR CETTE ÉQUIPE SPÉCIFIQUE → sprints parallèles autorisés.
   const requestedTeamId = String(formData.get("teamId") ?? "").trim() || teamId;
-  const boundTeam = await prisma.team.findUnique({
-    where: { id: teamId },
-    select: { productId: true },
+  const { requireWorkspace } = await import("@/lib/context");
+  const { userId, workspaceId } = await requireWorkspace();
+  const boundTeam = await prisma.team.findFirst({
+    where: { id: teamId, workspaceId },
+    select: { productId: true, workspaceId: true },
   });
-  const targetTeam = await prisma.team.findUnique({
-    where: { id: requestedTeamId },
-    select: { id: true, productId: true },
+  const targetTeam = await prisma.team.findFirst({
+    where: { id: requestedTeamId, workspaceId },
+    select: { id: true, productId: true, workspaceId: true },
   });
   if (!boundTeam || !targetTeam || targetTeam.productId !== boundTeam.productId) {
     return { error: "Équipe concernée invalide : choisissez une équipe de ce produit." };
   }
   const effectiveTeamId = targetTeam.id;
-  const userId = await currentUserId();
   await requireTeamMember(userId, effectiveTeamId);
   const parsed = SprintSchema.safeParse({
     title: formData.get("title"),
@@ -120,6 +121,7 @@ export async function createSprint(
   const sprint = await prisma.sprint.create({
     data: {
       teamId: effectiveTeamId,
+      workspaceId,
       title: parsed.data.title,
       goal: parsed.data.goal,
       status: "PLANNING",

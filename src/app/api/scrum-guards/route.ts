@@ -343,6 +343,9 @@ async function runDbBackedMatrix() {
   // Mot de passe éphémère aléatoire pour les fixtures de test (jamais versionné).
   const { randomUUID } = await import("node:crypto");
   const passwordHash = await bcrypt.hash(`guard-${randomUUID()}`, 10);
+  const fixtureWorkspace = await prisma.workspace.create({
+    data: { name: `Guard ${tag}`, slug: `guard-${tag}`.slice(0, 60) },
+  });
   const mkUser = (role: string) =>
     prisma.user.create({
       data: {
@@ -350,6 +353,7 @@ async function runDbBackedMatrix() {
         name: `Guard ${role}`,
         passwordHash,
         globalRole: "MEMBER",
+        workspaceId: fixtureWorkspace.id,
       },
     });
   const createdUserIds: string[] = [];
@@ -364,12 +368,18 @@ async function runDbBackedMatrix() {
     createdUserIds.push(po.id, dev.id, sm.id, sh.id);
 
     const product = await prisma.product.create({
-      data: { name: `Guard product ${tag}`, productOwnerId: po.id },
+      data: {
+        name: `Guard product ${tag}`,
+        productOwnerId: po.id,
+        productOwnerEmail: po.email,
+        scrumMasterEmail: sm.email,
+        workspaceId: fixtureWorkspace.id,
+      },
     });
     productId = product.id;
 
     const team = await prisma.team.create({
-      data: { name: `Guard team ${tag}`, productId: product.id },
+      data: { name: `Guard team ${tag}`, productId: product.id, workspaceId: fixtureWorkspace.id },
     });
     await prisma.teamMembership.createMany({
       data: [
@@ -403,6 +413,7 @@ async function runDbBackedMatrix() {
     const sprint = await prisma.sprint.create({
       data: {
         teamId: team.id,
+        workspaceId: fixtureWorkspace.id,
         goal: "Objectif",
         status: "PLANNING",
         startDate: new Date("2026-10-05"),
@@ -489,6 +500,7 @@ async function runDbBackedMatrix() {
     const nextSprint = await prisma.sprint.create({
       data: {
         teamId: team.id,
+        workspaceId: fixtureWorkspace.id,
         goal: "Sprint suivant",
         status: "PLANNING",
         startDate: new Date("2026-10-20"),
@@ -502,6 +514,7 @@ async function runDbBackedMatrix() {
     const expiredSprint = await prisma.sprint.create({
       data: {
         teamId: team.id,
+        workspaceId: fixtureWorkspace.id,
         goal: "Sprint expiré",
         status: "ACTIVE",
         startDate: new Date("2026-01-01"),
@@ -569,6 +582,8 @@ async function runDbBackedMatrix() {
     if (createdUserIds.length) {
       await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
     }
+    // Espace éphémère (cascade vers les éventuels résidus de fixtures).
+    await prisma.workspace.deleteMany({ where: { slug: `guard-${tag}`.slice(0, 60) } });
   }
 }
 

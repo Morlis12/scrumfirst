@@ -32,10 +32,50 @@ import {
   SPRINT_STATUS,
 } from "@/lib/scrum-rules";
 
+/**
+ * Cloisonnement commercial : un acteur hors de son espace de travail est
+ * neutralisé (aucun rôle, aucun droit) — toutes les gardes refusent alors.
+ */
+function neuteredActor(userId: string): Actor {
+  return {
+    userId,
+    teamRole: null,
+    participatesAsDeveloper: false,
+    isProductOwner: false,
+    canActAsDeveloper: false,
+    globalRole: null,
+    email: null,
+  };
+}
+
+/** Vérifie que le produit visé appartient à l'espace de l'utilisateur. */
+async function isProductInUserWorkspace(
+  userId: string,
+  productId: string,
+): Promise<boolean> {
+  const [user, product] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { workspaceId: true } }),
+    prisma.product.findUnique({ where: { id: productId }, select: { workspaceId: true } }),
+  ]);
+  return !!user?.workspaceId && user.workspaceId === product?.workspaceId;
+}
+
+/** Vérifie que l'équipe visée appartient à l'espace de l'utilisateur. */
+async function isTeamInUserWorkspace(userId: string, teamId: string): Promise<boolean> {
+  const [user, team] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { workspaceId: true } }),
+    prisma.team.findUnique({ where: { id: teamId }, select: { workspaceId: true } }),
+  ]);
+  return !!user?.workspaceId && user.workspaceId === team?.workspaceId;
+}
+
 export async function resolveProductActor(
   userId: string,
   productId: string,
 ): Promise<Actor> {
+  if (!(await isProductInUserWorkspace(userId, productId))) {
+    return neuteredActor(userId);
+  }
   const [membership, product, user] = await Promise.all([
     prisma.teamMembership.findFirst({
       where: { userId, team: { productId } },
@@ -90,6 +130,9 @@ async function resolveTeamActor(
   userId: string,
   teamId: string,
 ): Promise<Actor & { productId: string | null }> {
+  if (!(await isTeamInUserWorkspace(userId, teamId))) {
+    return { ...neuteredActor(userId), productId: null };
+  }
   const [membership, team, user] = await Promise.all([
     prisma.teamMembership.findUnique({
       where: { userId_teamId: { userId, teamId } },
@@ -123,6 +166,7 @@ export async function teamIdForProductUser(
   userId: string,
   productId: string,
 ) {
+  if (!(await isProductInUserWorkspace(userId, productId))) return null;
   const m = await prisma.teamMembership.findFirst({
     where: { userId, team: { productId } },
     select: { teamId: true },
@@ -488,7 +532,7 @@ export async function guardReturnItemToBacklog(
   // Autorisation : membre de la Scrum Team (PO, SM, Dev) — Stakeholder exclu.
   const team = await prisma.team.findUnique({
     where: { id: teamId },
-    select: { productId: true, product: { select: { productOwnerId: true } } },
+    select: { productId: true, workspaceId: true, product: { select: { productOwnerId: true } } },
   });
   if (!team) return { ok: false, code: "TEAM_NOT_FOUND", message: "Équipe introuvable." };
   const membership = await prisma.teamMembership.findUnique({
@@ -496,8 +540,11 @@ export async function guardReturnItemToBacklog(
   });
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { globalRole: true, email: true },
+    select: { globalRole: true, email: true, workspaceId: true },
   });
+  if (!user?.workspaceId || user.workspaceId !== team.workspaceId) {
+    return { ok: false, code: "WORKSPACE_MISMATCH", message: "Équipe hors de votre espace de travail." };
+  }
   const actor: Actor = {
     userId,
     teamRole: membership?.role ?? null,
@@ -525,7 +572,7 @@ export async function guardDeleteSprint(
 ): Promise<GuardResult> {
   const sprint = await prisma.sprint.findUnique({
     where: { id: sprintId },
-    include: { team: { select: { productId: true } } },
+    include: { team: { select: { productId: true, workspaceId: true } } },
   });
   if (!sprint)
     return { ok: false, code: "SPRINT_NOT_FOUND", message: "Sprint introuvable." };
@@ -539,9 +586,12 @@ export async function guardDeleteSprint(
     }),
     prisma.user.findUnique({
       where: { id: userId },
-      select: { globalRole: true, email: true },
+      select: { globalRole: true, email: true, workspaceId: true },
     }),
   ]);
+  if (!user?.workspaceId || user.workspaceId !== sprint.team.workspaceId) {
+    return { ok: false, code: "WORKSPACE_MISMATCH", message: "Sprint hors de votre espace de travail." };
+  }
   const teamRole = membership?.role ?? null;
   const actor: Actor = {
     userId,
@@ -835,15 +885,18 @@ export async function guardPlanRetroAction(
     }),
     prisma.team.findUnique({
       where: { id: teamId },
-      select: { product: { select: { productOwnerId: true } } },
+      select: { workspaceId: true, product: { select: { productOwnerId: true } } },
     }),
     prisma.user.findUnique({
       where: { id: userId },
-      select: { globalRole: true, email: true },
+      select: { globalRole: true, email: true, workspaceId: true },
     }),
   ]);
   if (!team)
     return { ok: false, code: "TEAM_NOT_FOUND", message: "Équipe introuvable." };
+  if (!user?.workspaceId || user.workspaceId !== team.workspaceId) {
+    return { ok: false, code: "WORKSPACE_MISMATCH", message: "Équipe hors de votre espace de travail." };
+  }
   const { canPlanRetroAction } = await import("@/lib/scrum-rules");
   const teamRole = membership?.role ?? null;
   const actor: Actor = {

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { currentUserId, getMyProducts } from "@/lib/context";
+import { currentUserId, getMyProducts, requireWorkspace } from "@/lib/context";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { AutoFilterSelect } from "@/components/auto-filter";
 import { dailyNoteTitleFor } from "@/lib/daily-notes";
@@ -108,6 +108,7 @@ export default async function HistoryPage({
   const userId = await currentUserId();
   const params = await searchParams;
   const products = await getMyProducts(userId);
+  const { workspaceId } = await requireWorkspace();
   if (products.length === 0) {
     return (
       <main className="mx-auto w-full max-w-6xl px-4 py-6">
@@ -129,7 +130,7 @@ export default async function HistoryPage({
   // Le menu Sprint se remplit dynamiquement dès qu&apos;un produit est choisi.
   const sprints = productId
     ? await prisma.sprint.findMany({
-        where: { team: { productId } },
+        where: { workspaceId, team: { productId } },
         include: {
           team: { select: { id: true, name: true } },
           _count: { select: { backlogItems: true, dailyNotes: true } },
@@ -147,12 +148,12 @@ export default async function HistoryPage({
   const [notes, sprintItems, activeCriterionIds] = selectedSprint
     ? await Promise.all([
         prisma.dailyNote.findMany({
-          where: { sprintId: selectedSprint.id },
+          where: { sprintId: selectedSprint.id, sprint: { workspaceId } },
           include: { author: { select: { email: true } } },
           orderBy: { createdAt: "desc" },
         }),
         prisma.backlogItem.findMany({
-          where: { sprintId: selectedSprint.id },
+          where: { sprintId: selectedSprint.id, sprint: { workspaceId } },
           select: {
             id: true,
             title: true,
@@ -160,7 +161,7 @@ export default async function HistoryPage({
           },
         }),
         prisma.doneCriterion.findMany({
-          where: { productId: productId ?? "", active: true },
+          where: { productId: productId ?? "", active: true, product: { workspaceId } },
           select: { id: true },
         }),
       ])

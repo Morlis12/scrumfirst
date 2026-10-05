@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { currentUserId, getMyProducts } from "@/lib/context";
+import { currentUserId, getMyProducts, requireWorkspace } from "@/lib/context";
 import { resolveProductActor } from "@/lib/scrum-guards";
 import { isPOActor } from "@/lib/scrum-rules";
 import {
@@ -41,6 +41,12 @@ export default async function BacklogPage({
             <Field label="Nom du produit">
               <input name="name" required minLength={3} className={inputClass} placeholder="Mon produit" />
             </Field>
+            <Field label="Product Owner du produit (email)">
+              <input name="productOwnerEmail" type="email" required className={inputClass} placeholder="po@espace.fr" />
+            </Field>
+            <Field label="Scrum Master du produit (email)">
+              <input name="scrumMasterEmail" type="email" required className={inputClass} placeholder="sm@espace.fr" />
+            </Field>
           </ActionForm>
         </Card>
       </main>
@@ -51,16 +57,17 @@ export default async function BacklogPage({
   const productId =
     products.some((p) => p.id === params.product) ? params.product! : products[0]!.id;
 
+  const { workspaceId } = await requireWorkspace();
   const [product, items, actor] = await Promise.all([
-    prisma.product.findUnique({
-      where: { id: productId },
+    prisma.product.findFirst({
+      where: { id: productId, workspaceId },
       include: {
         goals: { orderBy: { setAt: "desc" } },
         productOwner: { select: { email: true } },
       },
     }),
     prisma.backlogItem.findMany({
-      where: { productId, sprintId: null },
+      where: { productId, sprintId: null, product: { workspaceId } },
       orderBy: { order: "asc" },
     }),
     resolveProductActor(userId, productId),

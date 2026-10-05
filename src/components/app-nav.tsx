@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { getSessionUser } from "@/lib/dal";
+import { prisma } from "@/lib/prisma";
 import { logout } from "@/app/actions/auth";
 import { NavLinks } from "@/components/nav-links";
+import { AccountMenu, WorkspaceMenu } from "@/components/nav-menus";
 
 const LINKS = [
   { href: "/products", label: "Produits" },
@@ -15,27 +17,46 @@ const LINKS = [
 export async function AppNav() {
   const user = await getSessionUser();
   if (!user) return null;
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: {
+      workspaceId: true,
+      workspace: { select: { name: true } },
+    },
+  });
+  const workspaceName = dbUser?.workspace?.name ?? "Mon espace";
+  const [memberCount, productCount] = dbUser?.workspaceId
+    ? await Promise.all([
+        prisma.user.count({ where: { workspaceId: dbUser.workspaceId } }),
+        prisma.product.count({ where: { workspaceId: dbUser.workspaceId } }),
+      ])
+    : [0, 0];
   return (
     <header className="sticky top-0 z-10 border-b border-navy-950 bg-navy-900 text-white shadow-sm">
-      <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-2 px-4 py-2.5">
-        <Link href="/backlog" className="mr-2 font-semibold text-white">
+      <div className="mx-auto flex w-full max-w-5xl flex-nowrap items-center gap-1.5 px-3 py-2 sm:gap-2 sm:px-4">
+        <Link href="/backlog" className="shrink-0 text-sm font-semibold text-white sm:mr-1 sm:text-base">
           ScrumFirst<span className="text-sand-300">.</span>
         </Link>
+        <WorkspaceMenu
+          workspaceName={workspaceName}
+          memberCount={memberCount}
+          productCount={productCount}
+        />
         <NavLinks links={LINKS} />
         <span className="flex shrink-0 flex-col items-center leading-none">
-          <span className="mb-0.5 text-[10px] font-semibold text-sand-200">
+          <span className="mb-0.5 text-[9px] font-semibold text-sand-200 sm:text-[10px]">
             dashboard
           </span>
           <Link
             href="/dashboard"
             title="Tableau de bord des métriques"
             aria-label="Ouvrir le tableau de bord des métriques"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-sand-300 text-navy-900 shadow-sm transition hover:scale-105 hover:bg-sand-200"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-sand-300 text-navy-900 shadow-sm transition hover:scale-105 hover:bg-sand-200 sm:h-8 sm:w-8"
           >
             <svg
               aria-hidden="true"
-              width="18"
-              height="18"
+              width="16"
+              height="16"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -51,19 +72,19 @@ export async function AppNav() {
           </Link>
         </span>
         <span className="flex shrink-0 flex-col items-center leading-none">
-          <span className="mb-0.5 text-[10px] font-semibold text-sand-200">
+          <span className="mb-0.5 text-[9px] font-semibold text-sand-200 sm:text-[10px]">
             historique
           </span>
           <Link
             href="/history"
             title="Historique temporel des Daily"
             aria-label="Ouvrir l'historique temporel des Daily"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-sand-300 text-navy-900 shadow-sm transition hover:scale-105 hover:bg-sand-200"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-sand-300 text-navy-900 shadow-sm transition hover:scale-105 hover:bg-sand-200 sm:h-8 sm:w-8"
           >
             <svg
               aria-hidden="true"
-              width="18"
-              height="18"
+              width="16"
+              height="16"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -78,19 +99,19 @@ export async function AppNav() {
           </Link>
         </span>
         <span className="flex shrink-0 flex-col items-center leading-none">
-          <span className="mb-0.5 text-[10px] font-semibold text-sand-200">
+          <span className="mb-0.5 text-[9px] font-semibold text-sand-200 sm:text-[10px]">
             guide scrum
           </span>
           <Link
             href="/guide"
             title="Guide Scrum — le diagramme unique : rôles, événements, artefacts"
             aria-label="Ouvrir le guide Scrum (diagramme de référence)"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-sand-300 text-navy-900 shadow-sm transition hover:scale-105 hover:bg-sand-200"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-sand-300 text-navy-900 shadow-sm transition hover:scale-105 hover:bg-sand-200 sm:h-8 sm:w-8"
           >
             <svg
               aria-hidden="true"
-              width="18"
-              height="18"
+              width="16"
+              height="16"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -103,35 +124,11 @@ export async function AppNav() {
             </svg>
           </Link>
         </span>
-        <form
-          action={logout}
-          className="flex shrink-0 flex-col items-center leading-none"
-        >
-          <span className="mb-0.5 text-[10px] font-semibold text-sand-200">
-            compte
-          </span>
-          <button
-            type="submit"
-            title={`Connecté en tant que ${user.email} — cliquer pour se déconnecter`}
-            aria-label={`Se déconnecter (${user.email})`}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-sand-300 text-navy-900 shadow-sm transition hover:scale-105 hover:bg-sand-200"
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
-            </svg>
-          </button>
-        </form>
+        <AccountMenu
+          email={user.email}
+          workspaceName={workspaceName}
+          logout={logout}
+        />
       </div>
     </header>
   );

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { currentUserId, getMyProducts } from "@/lib/context";
+import { currentUserId, getMyProducts, requireWorkspace } from "@/lib/context";
 import { resolveProductActor } from "@/lib/scrum-guards";
 import { canCheckDod, canManageDodCriteria } from "@/lib/scrum-rules";
 import {
@@ -29,14 +29,15 @@ export default async function DodPage({
   const params = await searchParams;
   const productId = products.some((p) => p.id === params.product) ? params.product! : products[0]!.id;
 
+  const { workspaceId } = await requireWorkspace();
   const [product, criteria, items] = await Promise.all([
-    prisma.product.findUnique({ where: { id: productId } }),
+    prisma.product.findFirst({ where: { id: productId, workspaceId } }),
     prisma.doneCriterion.findMany({
-      where: { productId },
+      where: { productId, product: { workspaceId } },
       orderBy: { label: "asc" },
     }),
     prisma.backlogItem.findMany({
-      where: { productId, status: "IN_SPRINT" },
+      where: { productId, status: "IN_SPRINT", product: { workspaceId } },
       include: {
         doneChecks: { select: { criterionId: true } },
         sprint: { select: { goal: true, status: true } },

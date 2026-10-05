@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { currentUserId, getMyProducts, getProductTeams, getTeamSprints } from "@/lib/context";
+import { currentUserId, getMyProducts, getProductTeams, getTeamSprints, requireWorkspace } from "@/lib/context";
 import { getMembership } from "@/lib/dal";
 import {
   canCreateSprint,
@@ -62,7 +62,8 @@ export default async function PlanningPage({
     );
   }
   const productId = products.some((p) => p.id === params.product) ? params.product! : products[0]!.id;
-  const teams = await getProductTeams(productId);
+  const { workspaceId } = await requireWorkspace();
+  const teams = await getProductTeams(productId, workspaceId);
   if (teams.length === 0) {
     return (
       <main className="mx-auto w-full max-w-5xl px-4 py-6">
@@ -74,14 +75,14 @@ export default async function PlanningPage({
   // Fin par time-box : les Sprints dont la durée est écoulée sont clôturés
   // automatiquement (items DoD validés conservés, autres retournés au Backlog).
   await autoCloseExpiredSprints(teamId);
-  const sprints = await getTeamSprints(teamId);
+  const sprints = await getTeamSprints(teamId, workspaceId);
   const sprintId = sprints.some((s) => s.id === params.sprint) ? params.sprint : sprints[0]?.id ?? null;
 
   const [membership, sprint, readyItems, boardItems, criteria] = await Promise.all([
     getMembership(userId, teamId),
     sprintId
-      ? prisma.sprint.findUnique({
-          where: { id: sprintId },
+      ? prisma.sprint.findFirst({
+          where: { id: sprintId, workspaceId, teamId },
           include: {
             backlogItems: {
               include: {
@@ -94,17 +95,17 @@ export default async function PlanningPage({
         })
       : null,
     prisma.backlogItem.findMany({
-      where: { productId, status: "READY", sprintId: null },
+      where: { productId, status: "READY", sprintId: null, product: { workspaceId } },
       orderBy: { order: "asc" },
     }),
     // Boîte de gauche : TOUS les items du produit sélectionné hors Sprint et non DONE
     // (hors Sprint, statut différent de DONE) — sans filtre restrictif sur REFINED.
     prisma.backlogItem.findMany({
-      where: { productId, sprintId: null, status: { not: "DONE" } },
+      where: { productId, sprintId: null, status: { not: "DONE" }, product: { workspaceId } },
       orderBy: { order: "asc" },
     }),
     prisma.doneCriterion.findMany({
-      where: { productId, active: true },
+      where: { productId, active: true, product: { workspaceId } },
       orderBy: { label: "asc" },
     }),
   ]);

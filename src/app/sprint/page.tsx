@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { currentUserId, getMyProducts, getProductTeams } from "@/lib/context";
+import { currentUserId, getMyProducts, getProductTeams, requireWorkspace } from "@/lib/context";
 import { autoCloseExpiredSprints, resolveProductActor } from "@/lib/scrum-guards";
 import { getMembership } from "@/lib/dal";
 import { compareEventsByScrumOrder, isOpenSprintStatus, isScrumTeamActor } from "@/lib/scrum-rules";
@@ -41,7 +41,8 @@ export default async function SprintPage({
   const productId = products.some((p) => p.id === params.product)
     ? params.product!
     : products[0]!.id;
-  const teams = await getProductTeams(productId);
+  const { workspaceId } = await requireWorkspace();
+  const teams = await getProductTeams(productId, workspaceId);
   if (teams.length === 0) {
     return (
       <main className="mx-auto w-full max-w-6xl px-4 py-6">
@@ -55,7 +56,7 @@ export default async function SprintPage({
   await autoCloseExpiredSprints(teamId);
 
   const sprints = await prisma.sprint.findMany({
-    where: { teamId },
+    where: { teamId, workspaceId },
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { backlogItems: true } } },
   });
@@ -66,8 +67,8 @@ export default async function SprintPage({
 
   const [sprint, criteria, dailyNotes, sprintEvents, reviewComments] = await Promise.all([
     sprintId
-      ? prisma.sprint.findUnique({
-          where: { id: sprintId },
+      ? prisma.sprint.findFirst({
+          where: { id: sprintId, workspaceId, teamId },
           include: {
             backlogItems: {
               include: {
@@ -80,7 +81,7 @@ export default async function SprintPage({
         })
       : null,
     prisma.doneCriterion.findMany({
-      where: { productId, active: true },
+      where: { productId, active: true, product: { workspaceId } },
       orderBy: { label: "asc" },
     }),
     // Requête séparée (plutôt qu'un `include: { dailyNotes }` sur Sprint) :
@@ -88,7 +89,7 @@ export default async function SprintPage({
     // que les champs strictement nécessaires à `SprintKanban`.
     sprintId
       ? prisma.dailyNote.findMany({
-          where: { sprintId },
+          where: { sprintId, sprint: { workspaceId, teamId } },
           select: {
             id: true,
             backlogItemId: true,
@@ -105,14 +106,14 @@ export default async function SprintPage({
     // Événements du Sprint (chronos + compteur Daily répété de l'étape 2).
     sprintId
       ? prisma.scrumEvent.findMany({
-          where: { sprintId },
+          where: { sprintId, sprint: { workspaceId, teamId } },
         })
       : [],
     // Session de Sprint Review : commentaires persistés liés au Sprint courant
     // (synthèse Team + retours Stakeholders, distingués par `kind`).
     sprintId
       ? prisma.stakeholderComment.findMany({
-          where: { sprintId },
+          where: { sprintId, sprint: { workspaceId, teamId } },
           select: {
             id: true,
             kind: true,
@@ -149,7 +150,7 @@ export default async function SprintPage({
     resolveProductActor(userId, productId),
     getMembership(userId, teamId),
     prisma.teamMembership.findMany({
-      where: { teamId },
+      where: { teamId, team: { workspaceId } },
       select: { userId: true, role: true },
     }),
     prisma.user.findUnique({

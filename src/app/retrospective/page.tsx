@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { currentUserId, getMyProducts, getProductTeams } from "@/lib/context";
+import { currentUserId, getMyProducts, getProductTeams, requireWorkspace } from "@/lib/context";
 import { getMembership } from "@/lib/dal";
 import { resolveProductActor } from "@/lib/scrum-guards";
 import { RETRO_IDEA_COLUMNS, canPlanRetroAction } from "@/lib/scrum-rules";
@@ -69,7 +69,8 @@ export default async function RetrospectivePage({
     params.product !== undefined && products.some((p) => p.id === params.product)
       ? (params.product as string)
       : (firstProduct?.id ?? "");
-  const teams = await getProductTeams(productId);
+  const { workspaceId } = await requireWorkspace();
+  const teams = await getProductTeams(productId, workspaceId);
   if (teams.length === 0) {
     return (
       <main className="mx-auto w-full max-w-6xl px-4 py-6">
@@ -84,7 +85,7 @@ export default async function RetrospectivePage({
       : (firstTeam?.id ?? "");
 
   const sprints = await prisma.sprint.findMany({
-    where: { teamId },
+    where: { teamId, workspaceId },
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { backlogItems: true } } },
   });
@@ -109,12 +110,12 @@ export default async function RetrospectivePage({
   const [ideas, actions] = selectedSprint
     ? await Promise.all([
         prisma.retrospectiveIdea.findMany({
-          where: { sprintId: selectedSprint.id },
+          where: { sprintId: selectedSprint.id, sprint: { workspaceId } },
           include: { author: { select: { email: true } } },
           orderBy: { createdAt: "asc" },
         }),
         prisma.retrospectiveAction.findMany({
-          where: { sprintId: selectedSprint.id },
+          where: { sprintId: selectedSprint.id, sprint: { workspaceId } },
           orderBy: { createdAt: "asc" },
         }),
       ])
