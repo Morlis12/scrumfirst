@@ -24,6 +24,64 @@ model Workspace {
   products Product[]
   teams    Team[]
   sprints  Sprint[]
+  initiativeRequests InitiativeRequest[]
+  ingestionLogs IngestionLog[]
+}
+
+// ---------- SAS d'atterrissage (Staging Area) — InitiatIV' Request ----------
+// Zone tampon des demandes BRUTES, totalement séparée de la base des produits
+// en plein Scrum (`Product`). Une initiative ne devient un `Product` actif
+// qu'après validation explicite (« 🚀 Valider et Scrummer ») : elle passe
+// alors au statut ARCHIVED et un enregistrement officiel est créé dans
+// `Product` avec PO / SM / équipe dédiée.
+// Anti-doublon : `title` UNIQUE (vérifié aussi contre `Product.name` à l'import).
+model InitiativeRequest {
+  id          String   @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title       String   @unique
+  description String?
+  nature      String   @default("")
+  urgency     String   @default("MEDIUM")
+  impact      String?
+  sourceFile  String?
+  status      String   @default("PENDING") // PENDING, ARCHIVED
+  convertedProductId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // ---------- Traçabilité d'ingestion / Audit lineage (SAS) ----------
+  // Email de l'utilisateur connecté ayant fait le dépôt (colonne « Par »).
+  importedByEmail String?
+  // Champs AGL d'origine capturés à l'ingestion (formulaire InitiatIV').
+  requesterFirstName String?
+  requesterLastName  String?
+  requesterFunction  String?
+  department         String?
+  beneficiaries      String?
+  sourceElements     String?
+  // Compteur anti-conflit : nb de fois où l'algorithme a intercepté et
+  // corrigé un doublon sur cette initiative (mise à jour au lieu de créer).
+  duplicateHits Int @default(0)
+
+  @@index([workspaceId, status])
+}
+
+// ---------- Journal des ingestions (stats doublons / audit SAS) ----------
+// Une ligne par import CSV : permet le compteur « doublons interceptés ».
+model IngestionLog {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fileName        String
+  importedByEmail String?
+  created         Int      @default(0)
+  updated         Int      @default(0)
+  skipped         Int      @default(0)
+  totalRows       Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
 }
 
 // ---------- Core ----------

@@ -75,6 +75,9 @@ export function DailyScrumTracker({
         <span className="text-xs text-navy-900/70">
           Chrono journalier : {timeboxMinutes} min — réinitialisé à chaque validation pour le lendemain.
         </span>
+        <span className="w-full text-xs text-navy-900/70">
+          📍 Selon le Scrum Guide, les Daily se tiennent chaque jour au même endroit et à la même heure.
+        </span>
       </div>
 
       {/* Barre de progression (verte à la clôture définitive) */}

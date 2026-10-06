@@ -124,6 +124,32 @@ export async function AppNav() {
             </svg>
           </Link>
         </span>
+        <span className="flex shrink-0 flex-col items-center leading-none">
+          <span className="mb-0.5 text-[9px] font-semibold text-sand-200 sm:text-[10px]">
+            sas
+          </span>
+          <Link
+            href="/requests"
+            title="SAS d'atterrissage — ingestion des demandes InitiatIV'"
+            aria-label="Ouvrir le SAS d'atterrissage (ingestion des demandes)"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-sand-300 text-navy-900 shadow-sm transition hover:scale-105 hover:bg-sand-200 sm:h-8 sm:w-8"
+          >
+            <svg
+              aria-hidden="true"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+              <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+            </svg>
+          </Link>
+        </span>
         <AccountMenu
           email={user.email}
           workspaceName={workspaceName}
